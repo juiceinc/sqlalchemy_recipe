@@ -1,0 +1,7 @@
+faker
+SQLAlchemy>=1.4
+tablib
+pyyaml
+dateparser
+attrs
+lark
