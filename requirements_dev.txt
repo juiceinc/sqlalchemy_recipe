@@ -1,0 +1,13 @@
+-r requirements.txt
+pip-tools
+bump2version
+packaging
+pytest
+pytest-cov
+twine
+freezegun
+psycopg2-binary
+sqlalchemy-redshift
+sqlalchemy-bigquery
+google-api-core
+# -e .
