@@ -1,7 +1,11 @@
+attrs
+dateparser
 faker
+lark
+pyyaml
 SQLAlchemy>=1.4
 tablib
-pyyaml
-dateparser
-attrs
-lark
+typing_extensions
+dogpile.cache
+redis
+structlog

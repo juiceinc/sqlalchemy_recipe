@@ -14,6 +14,8 @@ except ImportError:
 if sys.argv[-1] == "publish":
     os.system("python setup.py sdist upload")
     sys.exit()
+    
+    
 
 if sys.argv[-1] == "test":
     try:

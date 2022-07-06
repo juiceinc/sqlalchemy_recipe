@@ -6,7 +6,7 @@ pytest
 pytest-cov
 twine
 freezegun
-psycopg2-binary
+#psycopg2-binary
 sqlalchemy-redshift
 sqlalchemy-bigquery
 google-api-core
