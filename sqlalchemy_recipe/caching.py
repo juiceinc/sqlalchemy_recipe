@@ -9,46 +9,115 @@ Dogpile caching with SQLAlchemy.
 The rest of what's here are standard SQLAlchemy and dogpile.cache constructs.
 """
 
-from dogpile.cache.api import NO_VALUE
-from dogpile.util.readwrite_lock import LockError as DogpileLockError
-from recipe.utils import clean_unicode, prettyprintable_sql
-from redis.exceptions import ConnectionError, LockError as RedisLockError
-from sqlalchemy.orm.query import Query
 import structlog
+import unicodedata
+from dogpile.cache.util import sha1_mangle_key
+from dogpile.cache.api import NO_VALUE, CacheBackend
+from dogpile.util.readwrite_lock import LockError as DogpileLockError
+
+# from recipe.utils import clean_unicode, prettyprintable_sql
+from redis.exceptions import ConnectionError
+from redis.exceptions import LockError as RedisLockError
+from sqlalchemy.orm.query import Query
 
 SLOG = structlog.get_logger(__name__)
 
-# Build cache regions using django configuration
-SETTINGS.CACHE_REGIONS = {
-    "default": build_region(
-        region_type="redis",
-        region_args={
-            "host": settings.JB_REDIS_HOST,
-            "port": settings.JB_REDIS_PORT,
-            "db": settings.JB_REDIS_PORT,
-            "redis_expiration_time": 60 * 60 * 2,  # 2 hours
-            "distributed_lock": True,
-            "lock_timeout": 120,
-            "lock_sleep": 5,
-        },
-    ),
-    "juice_bigquery": build_region(
-        region_type="redis",
-        region_args={
-            "host": settings.JB_REDIS_HOST,
-            "port": settings.JB_REDIS_PORT,
-            "db": settings.JB_REDIS_PORT,
-            "redis_expiration_time": 60 * 60 * 24 * 365,  # 1 year
-            "distributed_lock": True,
-            "lock_timeout": 120,
-            "lock_sleep": 5,
-        },
-    ),
-}
+
+class DictionaryBackend(CacheBackend):
+    """A simple backend for testing."""
+
+    def __init__(self, arguments):
+        self.cache = {}
+
+    def get(self, key):
+        return self.cache.get(key, NO_VALUE)
+
+    def set(self, key, value):
+        self.cache[key] = value
+
+    def delete(self, key):
+        self.cache.pop(key)
 
 
+def clean_unicode(value):
+    """Convert value into ASCII bytes by brute force."""
+    if not isinstance(value, str):
+        value = str(value)
+    try:
+        return value.encode("ascii")
+    except UnicodeEncodeError:
+        value = unicodedata.normalize("NFKD", value)
+        return value.encode("ascii", "ignore")
 
-class CachingEngine:
+
+def unicode_sha1_mangle_key(key):
+    return sha1_mangle_key(clean_unicode(key))
+
+
+def mangle_key(key):
+    # prefix, key = key.split(":", 1)
+    base = "sqlalchemy_recipe:dogpile"
+    # if prefix:
+    #     base += f"{prefix}"
+    # else:
+    #     raise ValueError(key)
+    return f"{base}:{sha1_mangle_key(key)}"
+
+
+def _key_from_statement(statement):
+    """Given a Statement, create a cache key.
+
+    There are many approaches to this; here we use the simplest,
+    which is to create an md5 hash of the text of the SQL statement,
+    combined with stringified versions of all the bound parameters
+    within it.  There's a bit of a performance hit with
+    compiling out "query.statement" here; other approaches include
+    setting up an explicit cache key with a particular Query,
+    then combining that with the bound parameter values.
+    """
+    compiled = statement.compile()
+    params = compiled.params
+
+    # here we return the key as a long string.  our "key mangler"
+    # set up with the region will boil it down to an md5.
+
+    key = " ".join(
+        [clean_unicode(compiled).decode("utf-8")]
+        + [clean_unicode(params[k]).decode("utf-8") for k in sorted(params)]
+    )
+    return mangle_key(key)
+
+
+# # Build cache regions using django configuration
+# SETTINGS.CACHE_REGIONS = {
+#     "default": build_region(
+#         region_type="redis",
+#         region_args={
+#             "host": settings.JB_REDIS_HOST,
+#             "port": settings.JB_REDIS_PORT,
+#             "db": settings.JB_REDIS_PORT,
+#             "redis_expiration_time": 60 * 60 * 2,  # 2 hours
+#             "distributed_lock": True,
+#             "lock_timeout": 120,
+#             "lock_sleep": 5,
+#         },
+#     ),
+#     "juice_bigquery": build_region(
+#         region_type="redis",
+#         region_args={
+#             "host": settings.JB_REDIS_HOST,
+#             "port": settings.JB_REDIS_PORT,
+#             "db": settings.JB_REDIS_PORT,
+#             "redis_expiration_time": 60 * 60 * 24 * 365,  # 1 year
+#             "distributed_lock": True,
+#             "lock_timeout": 120,
+#             "lock_sleep": 5,
+#         },
+#     ),
+# }
+
+
+class CachingQuery(Query):
     """A Query subclass which optionally loads full results from a dogpile
     cache region.
 
@@ -169,7 +238,7 @@ class CachingEngine:
             SLOG.error("Cannot connect to query caching backend!")
 
 
-def _key_from_query(query, qualifier=None):
+def _key_from_query(query):
     """Given a Query, create a cache key.
 
     There are many approaches to this; here we use the simplest,
@@ -186,6 +255,29 @@ def _key_from_query(query, qualifier=None):
 
     # here we return the key as a long string.  our "key mangler"
     # set up with the region will boil it down to an md5.
+    return " ".join(
+        [clean_unicode(compiled).decode("utf-8")]
+        + [clean_unicode(params[k]).decode("utf-8") for k in sorted(params)]
+    )
+
+
+def _key_from_statement(statement):
+    """Given a Statement, create a cache key.
+
+    There are many approaches to this; here we use the simplest,
+    which is to create an md5 hash of the text of the SQL statement,
+    combined with stringified versions of all the bound parameters
+    within it.  There's a bit of a performance hit with
+    compiling out "query.statement" here; other approaches include
+    setting up an explicit cache key with a particular Query,
+    then combining that with the bound parameter values.
+    """
+    compiled = statement.compile()
+    params = compiled.params
+
+    # here we return the key as a long string.  our "key mangler"
+    # set up with the region will boil it down to an md5.
+
     return " ".join(
         [clean_unicode(compiled).decode("utf-8")]
         + [clean_unicode(params[k]).decode("utf-8") for k in sorted(params)]

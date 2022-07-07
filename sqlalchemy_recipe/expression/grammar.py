@@ -22,26 +22,34 @@ def is_valid_column(c: str) -> bool:
     return bool(VALID_COLUMN_RE.match(c))
 
 
-def make_columns_grammar(columns: dict) -> str:
-    """Return a lark rule that looks like
+def make_raw_column_rules(columns: dict) -> str:
+    """Return rules for each column. The rules are each given a
+    unique name prefixed by the datatype.
 
     // These are my raw columns
-    str_0: "[" + /username/i + "]" | /username/i
-    str_1: "[" + /department/i + "]" | /department/i
-    str_2: "[" + /testid/i + "]" | /testid/i
+    str_0: "[" + /username/i + "]"
+    str_1: "[" + /department/i + "]"
+    str_2: "[" + /testid/i + "]"
     """
     items = []
     for k in sorted(columns.keys()):
         c = columns[k]
-        if is_valid_column(c.name):
-            items.append(f'    {k}: "[" + /{c.name}/i + "]"')
+        items.append(f'    {k}: "[" + /{c.name}/i + "]"')
     return "\n".join(items).lstrip()
 
 
-def gather_columns(rule_name: str, columns: dict, prefix: str, additions=None) -> str:
-    """Build a list of all columns matching a prefix allong with potential additional rules."""
-    if additions is None:
-        additions = []
+def make_datatype_rule(
+    rule_name: str, columns: dict, prefix: str, additional_rules=None
+) -> str:
+    """
+    Build a list of all columns matching a prefix along with potential additional rules.
+    This creates a rule for a datatype. For instance, if there are two string
+    columns str_0 and str_1, we get.
+
+    string.1: str_0 | str_1 | ESCAPED_STRING | string_add | string_cast | string_coalesce | string_substr | string_if_statement | string_aggr | "(" + string + ")"
+    """
+    if additional_rules is None:
+        additional_rules = []
 
     raw_rule_name = rule_name.split(".")[0]
 
@@ -50,8 +58,10 @@ def gather_columns(rule_name: str, columns: dict, prefix: str, additions=None) -
 
     matching_keys = [k for k in sorted(columns.keys()) if k.startswith(f"{prefix}_")]
 
-    if matching_keys + additions:
-        return f"{rule_name}: " + " | ".join(matching_keys + additions + [paren_rule])
+    if matching_keys + additional_rules:
+        return f"{rule_name}: " + " | ".join(
+            matching_keys + additional_rules + [paren_rule]
+        )
     else:
         return f'{rule_name}: "DUMMYVALUNUSABLECOL"'
 
@@ -89,23 +99,24 @@ def make_columns_for_table(table: Table) -> dict:
     return columns
 
 
-def make_grammar(columns):
-    """Build a grammar for this selectable using columns"""
+def make_grammar(table):
+    """Build a lark grammar for a table."""
+    columns = make_columns_for_table(table)
     grammar = f"""
     col: boolean | string | num | date | datetime_end | datetime | unusable_col | unknown_col | error_math | error_vector_expr | error_not_nonboolean | error_between_expr | error_aggr | error_if_statement
     //paren_col: "(" col ")" -> col
 
     // These are the raw columns in the selectable
-    {make_columns_grammar(columns)}
+    {make_raw_column_rules(columns)}
 
-    {gather_columns("unusable_col", columns, "unusable", [])}
-    {gather_columns("date.1", columns, "date", ["date_conv", "date_fn", "day_conv", "week_conv", "month_conv", "quarter_conv", "year_conv", "dt_day_conv", "dt_week_conv", "dt_month_conv", "dt_quarter_conv", "dt_year_conv", "datetime_to_date_conv", "date_aggr", "date_if_statement", "date_coalesce"])}
-    {gather_columns("datetime.2", columns, "datetime", ["datetime_conv", "datetime_if_statement", "datetime_coalesce"])}
+    {make_datatype_rule("unusable_col", columns, "unusable", [])}
+    {make_datatype_rule("date.1", columns, "date", ["date_conv", "date_fn", "day_conv", "week_conv", "month_conv", "quarter_conv", "year_conv", "dt_day_conv", "dt_week_conv", "dt_month_conv", "dt_quarter_conv", "dt_year_conv", "datetime_to_date_conv", "date_aggr", "date_if_statement", "date_coalesce"])}
+    {make_datatype_rule("datetime.2", columns, "datetime", ["datetime_conv", "datetime_if_statement", "datetime_coalesce"])}
     // Datetimes that are converted to the end of day
-    {gather_columns("datetime_end.1", columns, "datetime", ["datetime_end_conv", "datetime_aggr"])}
-    {gather_columns("boolean.1", columns, "bool", ["TRUE", "FALSE", "bool_expr", "date_bool_expr", "datetime_bool_expr", "str_like_expr", "vector_expr", "between_expr", "date_between_expr", "datetime_between_expr", "not_boolean", "or_boolean", "and_boolean", "paren_boolean", "intelligent_date_expr", "intelligent_datetime_expr"])}
-    {gather_columns("string.1", columns, "str", ["ESCAPED_STRING", "string_add", "string_cast", "string_coalesce", "string_substr", "string_if_statement", "string_aggr"])}
-    {gather_columns("num.1", columns, "num", ["NUMBER", "num_add", "num_sub", "num_mul", "num_div", "int_cast", "num_coalesce", "aggr", "error_aggr", "num_if_statement", "age_conv"])}
+    {make_datatype_rule("datetime_end.1", columns, "datetime", ["datetime_end_conv", "datetime_aggr"])}
+    {make_datatype_rule("boolean.1", columns, "bool", ["TRUE", "FALSE", "bool_expr", "date_bool_expr", "datetime_bool_expr", "str_like_expr", "vector_expr", "between_expr", "date_between_expr", "datetime_between_expr", "not_boolean", "or_boolean", "and_boolean", "paren_boolean", "intelligent_date_expr", "intelligent_datetime_expr"])}
+    {make_datatype_rule("string.1", columns, "str", ["ESCAPED_STRING", "string_add", "string_cast", "string_coalesce", "string_substr", "string_if_statement", "string_aggr"])}
+    {make_datatype_rule("num.1", columns, "num", ["NUMBER", "num_add", "num_sub", "num_mul", "num_div", "int_cast", "num_coalesce", "aggr", "error_aggr", "num_if_statement", "age_conv"])}
     string_add: string "+" string
     num_add.1: num "+" num | "(" num "+" num ")"
     num_sub.1: num "-" num | "(" num "-" num ")"

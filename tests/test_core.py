@@ -1,5 +1,5 @@
 from sqlalchemy_recipe.core import *
-from sqlalchemy import create_engine, text, engine_from_config, MetaData
+from sqlalchemy import create_engine, text, engine_from_config, MetaData, select
 from unittest import TestCase
 import os
 
@@ -18,18 +18,49 @@ def make_dumper(engine):
 
 class RecipeTestCase(TestCase):
     def setUp(self) -> None:
+        from dogpile.cache import register_backend
+
+        register_backend("dictionary", "sqlalchemy_recipe.caching", "DictionaryBackend")
+
         config = {
             "sqlalchemy.url": f"sqlite:///{test_db}",
             "sqlalchemy.pool_pre_ping": True,
+            "cache.cache_queries": True,
+            "cache.dogpile.backend": "dictionary",
+            "cache.dogpile.expiration_time": 2,
         }
         self.dbinfo = get_dbinfo(config)
         return super().setUp()
 
     def testit(self):
-        tbl = self.dbinfo.reflect("census")
-        print(tbl, type(tbl), tbl.c)
-        print(self.dbinfo.grammars["census"])
+        tbl, grammar = self.dbinfo.reflect("census")
+        self.assertEqual(len(tbl.c), 5)
         with self.dbinfo.engine.connect() as conn:
-            result = conn.execute(text("select * from census limit 10"))
+            stmt = select(tbl).limit(5)
+            result = conn.execute(stmt)
             print(result.all())
+            self.assertEqual(len(self.dbinfo.TABLE_CACHE), 1)
+        self.assertEqual(1, 1)
+
+    def testcache(self):
+        from dogpile.cache import make_region
+
+        region = make_region("myregion", "dictionary")
+
+        region.configure("dictionary", expiration_time=300)
+
+        data = "somevalue"
+        region.set("somekey", data)
+        newdata = region.get("somekey")
+        self.assertEqual(data, newdata)
+        missing = region.get("missingval")
+        self.assertEqual(missing)
+
+    def testcache_query(self):
+        """We can query with cache using dbinfo"""
+        tbl, grm = self.dbinfo.reflect("census")
+        for i in range(5):
+            stmt = select(tbl).limit(1)
+            rez = self.dbinfo.execute(stmt)
+            print(rez)
         self.assertEqual(1, 2)

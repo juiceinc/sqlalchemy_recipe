@@ -1,17 +1,24 @@
 import functools
 from threading import Lock
+from typing import Tuple
 
 import attr
 import cachetools
-from sqlalchemy_recipe.expression.grammar import make_columns_for_table, make_grammar
 import structlog
 from cachetools import TTLCache, cached
-from sqlalchemy import MetaData, event, exc, select, engine_from_config, Table
+from dogpile.cache import CacheRegion, make_region
+from dogpile.cache.api import NoValue
+from sqlalchemy import MetaData, Table, engine_from_config, event, exc, select
+from sqlalchemy.engine import Engine
+
+from sqlalchemy_recipe.expression.grammar import make_grammar
+
+from .caching import _key_from_statement, mangle_key
 
 SLOG = structlog.get_logger(__name__)
 
 
-#: A global cache of DBInfo, keyed by the connection string.
+#: A global cache of DBInfo, keyed by engine config.
 #: Cached for 10 minutes, but accesses will refresh the TTL.
 _DBINFO_CACHE = TTLCache(maxsize=1024, ttl=600)
 _DBINFO_CACHE_LOCK = Lock()
@@ -54,17 +61,23 @@ def refreshing_cached(cache, key=cachetools.keys.hashkey, lock=None):
     return decorator
 
 
+def make_table_key(*args, **kwargs):
+    """Generate a unique key for this table information"""
+    return args[0]
+
+
 @attr.s
 class DBInfo(object):
     """An object for keeping track of SQLAlchemy objects related to a
     single database.
     """
 
-    engine = attr.ib()
-    cache_queries: bool = attr.ib()
+    engine: Engine = attr.ib()
+    dogpile_region: CacheRegion = attr.ib()
+    cache_queries: bool = attr.ib(default=False)
+    table_cache_maxsize = attr.ib(default=1024)
+    table_cache_ttl = attr.ib(default=600)
     metadata = attr.ib(default=None)
-    tables = attr.ib(default=dict)
-    grammars = attr.ib(default=dict)
     metadata_write_lock = attr.ib(default=None)
     is_postgres = attr.ib(default=False)
 
@@ -75,27 +88,44 @@ class DBInfo(object):
 
         self.metadata_write_lock = Lock()
 
-        self.tables = {}
-        self.grammars = {}
-        pg_identifiers = ["redshift", "postg", "pg"]
-        self.is_postgres = any((pg_id in self.engine.name for pg_id in pg_identifiers))
+        self.is_postgres = any(
+            (pg_id in self.engine.name for pg_id in ("redshift", "postg", "pg"))
+        )
+        self.TABLE_CACHE = TTLCache(
+            maxsize=self.table_cache_maxsize, ttl=self.table_cache_ttl
+        )
+        self.TABLE_LOCK = Lock()
 
-    def reflect(self, table: str) -> Table:
-        # Build a table definition with generic datatypes
-        if table not in self.tables:
-            self.tables[table] = Table(table, self.metadata, autoload_with=self.engine)
+        @refreshing_cached(
+            cache=self.TABLE_CACHE, key=make_table_key, lock=self.TABLE_LOCK
+        )
+        def reflect(table: str) -> Tuple:
+            # Build a table definition with generic datatypes
+            table = Table(table, self.metadata, autoload_with=self.engine)
+            grammar = make_grammar(table)
+            return table, grammar
 
-        if table not in self.grammars:
-            cols = make_columns_for_table(self.tables[table])
-            self.grammars[table] = make_grammar(cols)
+        self.reflect = reflect
 
-        return self.tables[table]
+    def invalidate(self, table: str):
+        """Remove cached information for a table"""
+        self.TABLE_CACHE.pop(table, None)
 
-    def execute(self, recipe):
-        with self.engine.connect() as connection:
-            result = connection.execute(recipe)
-            for row in result:
-                pass
+    def execute(self, statement):
+        from_cache = False
+        key = mangle_key(_key_from_statement(statement))
+        if self.dogpile_region:
+            val = self.dogpile_region.get(key)
+            if isinstance(val, NoValue):
+                with self.engine.connect() as connection:
+                    val = connection.execute(statement).all()
+                self.dogpile_region.set(key, val)
+            else:
+                from_cache = True
+            return val
+        else:
+            with self.engine.connect() as connection:
+                return connection.execute(statement).all()
 
     @property
     def drivername(self):
@@ -111,26 +141,35 @@ def make_dbinfo_key(*args, **kwargs):
 
 
 @refreshing_cached(cache=_DBINFO_CACHE, key=make_dbinfo_key, lock=_DBINFO_CACHE_LOCK)
-def get_dbinfo(
-    engine_config: dict,
-    prefix: str = "sqlalchemy.",
-    cache_queries: bool = False,
-    debug: bool = False,
-):
+def get_dbinfo(config: dict, debug: bool = False):
     """Get a (potentially cached) DBInfo object based on a connection string.
 
     Args:
-        engine_config (dict): A configuration dictionary
-        prefix (str): A prefix find engine related keys in the config dict
+        config (dict): A configuration dictionary for a sqlalchemy engine and dogpile
         cache_queries (bool): Should the queries be cached
         debug (bool): Add debugging to engine events
+
+    Engine configuration can be anything from engine_from_config. Engine configuration
+    uses a prefix of "sqlalchemy."
+    https://docs.sqlalchemy.org/en/14/core/engines.html#sqlalchemy.engine_from_config
+
+    Caching configuration accepts the following options:
+
+        caching.cache_queries (bool): Is query caching enabled? If true, then a
+            caching.dogpile_region must be configured.
+        caching.dogpile_region.*: Dogpile configuration used to configure a cache_region
+            from config. See https://dogpilecache.sqlalchemy.org/en/latest/api.html#dogpile.cache.region.CacheRegion.configure_from_config
+        caching.table_cache_maxsize (int): The number of objects to hold in table cache
+            for this database
+        caching.table_cache_ttl (int): The duration in seconds to hold table cache
+            items for if they are unused. If read, the ttl will be refreshed.
 
     Returns:
         DBInfo: A cached DBInfo object
     """
 
     # Note: Connections should be configured with pool_pre_ping=True
-    engine = engine_from_config(configuration=engine_config, prefix=prefix)
+    engine = engine_from_config(configuration=config, prefix="sqlalchemy.")
 
     # Optionally, listen to events
     if debug:
@@ -154,4 +193,13 @@ def get_dbinfo(
                 ),
             )
 
-    return DBInfo(engine=engine, cache_queries=cache_queries)
+    dogpile_region = None
+    cache_queries = config.get("cache.cache_queries", False)
+    if cache_queries:
+        # A dogpile_region must be configured.
+        dogpile_region = make_region()
+        dogpile_region.configure_from_config(config, "cache.dogpile.")
+
+    return DBInfo(
+        engine=engine, cache_queries=cache_queries, dogpile_region=dogpile_region
+    )
