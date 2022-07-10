@@ -1,6 +1,8 @@
+from dataclasses import dataclass
 import functools
 from threading import Lock
-from typing import Tuple
+from turtle import st
+from typing import List, Tuple
 
 import attr
 import cachetools
@@ -10,6 +12,7 @@ from dogpile.cache import CacheRegion, make_region
 from dogpile.cache.api import NoValue
 from sqlalchemy import MetaData, Table, engine_from_config, event, exc, select
 from sqlalchemy.engine import Engine
+from sqlalchemy_recipe.core import RecipeRow
 
 from sqlalchemy_recipe.expression.grammar import make_grammar
 
@@ -66,10 +69,18 @@ def make_table_key(*args, **kwargs):
     return args[0]
 
 
+@dataclass
+class ExecutionResult:
+    from_cache: bool
+    rows: List[RecipeRow]
+
+
 @attr.s
 class DBInfo(object):
     """An object for keeping track of SQLAlchemy objects related to a
     single database.
+
+    DBInfo will cache table
     """
 
     engine: Engine = attr.ib()
@@ -125,7 +136,10 @@ class DBInfo(object):
             return val
         else:
             with self.engine.connect() as connection:
-                return connection.execute(statement).all()
+                return ExecutionResult(
+                    from_cache=from_cache,
+                    rows=connection.execute(statement=statement).all(),
+                )
 
     @property
     def drivername(self):
@@ -155,13 +169,13 @@ def get_dbinfo(config: dict, debug: bool = False):
 
     Caching configuration accepts the following options:
 
-        caching.cache_queries (bool): Is query caching enabled? If true, then a
+        cache.cache_queries (bool): Is query caching enabled? If true, then a
             caching.dogpile_region must be configured.
-        caching.dogpile_region.*: Dogpile configuration used to configure a cache_region
+        cache.dogpile_region.*: Dogpile configuration used to configure a cache_region
             from config. See https://dogpilecache.sqlalchemy.org/en/latest/api.html#dogpile.cache.region.CacheRegion.configure_from_config
-        caching.table_cache_maxsize (int): The number of objects to hold in table cache
+        cache.table_cache_maxsize (int): The number of objects to hold in table cache
             for this database
-        caching.table_cache_ttl (int): The duration in seconds to hold table cache
+        cache.table_cache_ttl (int): The duration in seconds to hold table cache
             items for if they are unused. If read, the ttl will be refreshed.
 
     Returns:

@@ -2,7 +2,6 @@ import re
 from collections import defaultdict
 
 from sqlalchemy import Boolean, Date, DateTime, Integer, String, Table, text
-from sqlalchemy.sql.base import ColumnCollection
 from sqlalchemy.sql.sqltypes import Numeric
 
 from . import engine_support

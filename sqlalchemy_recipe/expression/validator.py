@@ -1,3 +1,5 @@
+from lark import Tree, Visitor
+from lark.lexer import Token
 
 
 class SQLALchemyValidator(Visitor):

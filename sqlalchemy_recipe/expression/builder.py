@@ -1,7 +1,12 @@
+from sqlalchemy import Table
+from sqlalchemy_recipe.dbinfo import DBInfo
+from lark import GrammarError, Lark, Transformer, Tree, Visitor, v_args
+from .transformer import TransformToSQLAlchemyExpression
+
 BUILDER_CACHE = {}
 
 
-class SQLAlchemyBuilder(object):
+class SQLAlchemyBuilder:
     @classmethod
     def get_builder(cls, selectable):
         if selectable not in BUILDER_CACHE:
@@ -13,23 +18,18 @@ class SQLAlchemyBuilder(object):
         global BUILDER_CACHE
         BUILDER_CACHE = {}
 
-    def __init__(self, engine, selectable):
+    def __init__(self, dbinfo: DBInfo, table: Table, grammar: str):
         """Parse a recipe field by building a custom grammar that
         uses the colums in a selectable.
 
         Args:
             selectable (Table): A SQLAlchemy selectable
         """
-        self.engine = engine
-        self.selectable = selectable
-        # Database driver
-        try:
-            self.drivername = engine.url.drivername
-        except Exception:
-            self.drivername = "unknown"
+        self.dbinfo = dbinfo
+        self.table = table
+        self.grammar = grammar
+        self.drivername = self.dbinfo.drivername
 
-        self.columns = make_columns_for_selectable(selectable)
-        self.grammar = make_grammar(self.columns)
         self.parser = Lark(
             self.grammar,
             parser="earley",
@@ -39,7 +39,7 @@ class SQLAlchemyBuilder(object):
             # predict_all=True,
         )
         self.transformer = TransformToSQLAlchemyExpression(
-            self.selectable, self.columns, self.drivername
+            self.table, 
         )
 
         # The data type of the last parsed expression

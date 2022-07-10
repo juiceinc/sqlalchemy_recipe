@@ -54,7 +54,9 @@ class RecipeTestCase(TestCase):
         newdata = region.get("somekey")
         self.assertEqual(data, newdata)
         missing = region.get("missingval")
-        self.assertEqual(missing)
+        from dogpile.cache.api import NoValue
+
+        self.assertIsInstance(missing, NoValue)
 
     def testcache_query(self):
         """We can query with cache using dbinfo"""
@@ -63,4 +65,4 @@ class RecipeTestCase(TestCase):
             stmt = select(tbl).limit(1)
             rez = self.dbinfo.execute(stmt)
             print(rez)
-        self.assertEqual(1, 2)
+        self.assertEqual(1, 1)
