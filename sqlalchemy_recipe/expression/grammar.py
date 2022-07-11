@@ -4,14 +4,6 @@ from collections import defaultdict
 from sqlalchemy import Boolean, Date, DateTime, Integer, String, Table, text
 from sqlalchemy.sql.sqltypes import Numeric
 
-from . import engine_support
-
-# SQL server can not support parameters in queries that are used for grouping
-# https://github.com/mkleehammer/pyodbc/issues/479
-# To avoid parameterization, we pass literals
-literal_1 = text("1")
-literal_0 = text("0")
-
 
 VALID_COLUMN_RE = re.compile(r"^\w+$")
 
@@ -34,7 +26,7 @@ def make_raw_column_rules(columns: dict) -> str:
     for k in sorted(columns.keys()):
         c = columns[k]
         items.append(f'    {k}: "[" + /{c.name}/i + "]"')
-    return "\n".join(items).lstrip()
+    return "\n".join(items)
 
 
 def make_datatype_rule(

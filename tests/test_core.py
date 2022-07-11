@@ -1,12 +1,10 @@
 from sqlalchemy_recipe.core import *
 from sqlalchemy import create_engine, text, engine_from_config, MetaData, select
 from unittest import TestCase
-import os
 
-from sqlalchemy_recipe.dbinfo import get_dbinfo
+from sqlalchemy_recipe.dbinfo import get_dbinfo, _TABLE_CACHE
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-test_db = os.path.join(dir_path, "data", "test_db.sqlite")
+from tests.utils import test_db
 
 
 def make_dumper(engine):
@@ -39,7 +37,7 @@ class RecipeTestCase(TestCase):
             stmt = select(tbl).limit(5)
             result = conn.execute(stmt)
             print(result.all())
-            self.assertEqual(len(self.dbinfo.TABLE_CACHE), 1)
+            self.assertEqual(len(_TABLE_CACHE), 1)
         self.assertEqual(1, 1)
 
     def testcache(self):

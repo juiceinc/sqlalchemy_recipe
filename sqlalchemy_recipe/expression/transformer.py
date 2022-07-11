@@ -26,6 +26,12 @@ from .utils import (
     convert_to_start_datetime,
 )
 
+# SQL server can not support parameters in queries that are used for grouping
+# https://github.com/mkleehammer/pyodbc/issues/479
+# To avoid parameterization, we pass literals
+literal_1 = text("1")
+literal_0 = text("0")
+
 
 @v_args(inline=True)  # Affects the signatures of the methods
 class TransformToSQLAlchemyExpression(Transformer):

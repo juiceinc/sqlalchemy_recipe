@@ -11,6 +11,10 @@ The rest of what's here are standard SQLAlchemy and dogpile.cache constructs.
 
 import structlog
 import unicodedata
+import cachetools
+from cachetools import TTLCache, cached
+
+import functools
 from dogpile.cache.util import sha1_mangle_key
 from dogpile.cache.api import NO_VALUE, CacheBackend
 from dogpile.util.readwrite_lock import LockError as DogpileLockError
@@ -86,3 +90,27 @@ def _key_from_statement(statement):
         + [clean_unicode(params[k]).decode("utf-8") for k in sorted(params)]
     )
     return mangle_key(key)
+
+
+def refreshing_cached(cache, key=cachetools.keys.hashkey, lock=None):
+    """Same as `cachetools.cached`,
+    but it also refreshes the TTL and checks for expiry on read operations.
+    """
+
+    def decorator(func):
+        func = cached(cache, key, lock)(func)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            if lock is not None:
+                with lock:
+                    cache[key(*args, **kwargs)] = result
+                    # cachetools also only auto-expires on *mutating*
+                    # operations, so we need to be explicit:
+                    cache.expire()
+            return result
+
+        return wrapper
+
+    return decorator

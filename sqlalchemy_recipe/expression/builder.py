@@ -1,7 +1,12 @@
-from sqlalchemy import Table
+import functools
+from sqlalchemy import Table, func
 from sqlalchemy_recipe.dbinfo import DBInfo
 from lark import GrammarError, Lark, Transformer, Tree, Visitor, v_args
+from datetime import datetime, date
+
+from sqlalchemy_recipe.expression.grammar import make_columns_for_table
 from .transformer import TransformToSQLAlchemyExpression
+from .validator import SQLALchemyValidator
 
 BUILDER_CACHE = {}
 
@@ -28,7 +33,7 @@ class SQLAlchemyBuilder:
         self.dbinfo = dbinfo
         self.table = table
         self.grammar = grammar
-        self.drivername = self.dbinfo.drivername
+        self.drivername = self.dbinfo.engine.url.drivername
 
         self.parser = Lark(
             self.grammar,
@@ -38,8 +43,10 @@ class SQLAlchemyBuilder:
             propagate_positions=True,
             # predict_all=True,
         )
+        columns = make_columns_for_table(self.table)
+
         self.transformer = TransformToSQLAlchemyExpression(
-            self.table, 
+            self.table, columns, self.dbinfo.engine.url.drivername
         )
 
         # The data type of the last parsed expression
@@ -76,7 +83,9 @@ class SQLAlchemyBuilder:
                 DataType: The datatype of the expression (bool, date, datetime, num, str)
         """
         tree = self.parser.parse(text, start="col")
-        validator = SQLALchemyValidator(text, forbid_aggregation, self.drivername)
+        validator = SQLALchemyValidator(
+            text, forbid_aggregation, self.dbinfo.engine.url.drivername
+        )
         validator.visit(tree)
         self.last_datatype = validator.last_datatype
 
