@@ -90,9 +90,8 @@ def make_columns_for_table(table: Table) -> dict:
     return columns
 
 
-def make_grammar(table):
+def make_grammar(table, columns):
     """Build a lark grammar for a table."""
-    columns = make_columns_for_table(table)
     grammar = f"""
     col: boolean | string | num | date | datetime_end | datetime | unusable_col | unknown_col | error_math | error_vector_expr | error_not_nonboolean | error_between_expr | error_aggr | error_if_statement
     //paren_col: "(" col ")" -> col

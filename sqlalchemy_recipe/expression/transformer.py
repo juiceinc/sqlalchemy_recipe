@@ -18,6 +18,8 @@ from sqlalchemy import (
     text,
 )
 
+from sqlalchemy_recipe.dbinfo import ReflectedTable
+
 from . import engine_support
 from .utils import (
     calc_date_range,
@@ -37,10 +39,15 @@ literal_0 = text("0")
 class TransformToSQLAlchemyExpression(Transformer):
     """Converts a field to a SQLAlchemy expression"""
 
-    def __init__(self, selectable, columns, drivername, forbid_aggregation=True):
+    def __init__(
+        self,
+        reflected_table: ReflectedTable,
+        drivername: str,
+        forbid_aggregation: bool = True,
+    ):
         self.text = None
-        self.selectable = selectable
-        self.columns = columns
+        self.selectable = reflected_table.table
+        self.columns = reflected_table.columns
         self.last_datatype = None
         # Convert all dates with this conversion
         self.convert_dates_with = None

@@ -2,7 +2,7 @@ from sqlalchemy_recipe.core import *
 from sqlalchemy import create_engine, text, engine_from_config, MetaData, select
 from unittest import TestCase
 
-from sqlalchemy_recipe.dbinfo import get_dbinfo, _TABLE_CACHE
+from sqlalchemy_recipe.dbinfo import get_dbinfo, _REFLECTED_TABLE_CACHE
 
 from tests.utils import test_db
 
@@ -31,13 +31,13 @@ class RecipeTestCase(TestCase):
         return super().setUp()
 
     def testit(self):
-        tbl, grammar = self.dbinfo.reflect("census")
-        self.assertEqual(len(tbl.c), 5)
+        reflected_table = self.dbinfo.reflect("census")
+        self.assertEqual(len(reflected_table.table.c), 5)
         with self.dbinfo.engine.connect() as conn:
-            stmt = select(tbl).limit(5)
+            stmt = select(reflected_table.table).limit(5)
             result = conn.execute(stmt)
             print(result.all())
-            self.assertEqual(len(_TABLE_CACHE), 1)
+            self.assertEqual(len(_REFLECTED_TABLE_CACHE), 1)
         self.assertEqual(1, 1)
 
     def testcache(self):
@@ -58,9 +58,9 @@ class RecipeTestCase(TestCase):
 
     def testcache_query(self):
         """We can query with cache using dbinfo"""
-        tbl, grm = self.dbinfo.reflect("census")
+        reflected_table = self.dbinfo.reflect("census")
         for i in range(5):
-            stmt = select(tbl).limit(1)
+            stmt = select(reflected_table.table).limit(1)
             rez = self.dbinfo.execute(stmt)
             print(rez)
         self.assertEqual(1, 1)

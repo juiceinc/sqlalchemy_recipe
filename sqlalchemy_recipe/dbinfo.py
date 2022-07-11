@@ -1,3 +1,4 @@
+from calendar import c
 from dataclasses import dataclass
 import faulthandler
 from hashlib import sha1
@@ -6,15 +7,16 @@ from typing import List
 
 import attr
 import structlog
+from lark import Lark
 from cachetools import TTLCache
 from dogpile.cache import CacheRegion, make_region
 from dogpile.cache.api import NoValue
-from sqlalchemy import MetaData, Table, engine_from_config, event, exc, select
+from sqlalchemy import MetaData, Table, column, engine_from_config, event, exc, select
 from sqlalchemy.engine import Engine
 
 from sqlalchemy_recipe.caching import _key_from_statement, mangle_key, refreshing_cached
 from sqlalchemy_recipe.core import RecipeRow
-from sqlalchemy_recipe.expression.grammar import make_grammar
+from sqlalchemy_recipe.expression.grammar import make_columns_for_table, make_grammar
 from sqlalchemy_recipe.utils.acquire import acquire_with_timeout
 from sqlalchemy.exc import NoSuchTableError, OperationalError
 
@@ -28,8 +30,8 @@ _DBINFO_CACHE_LOCK = Lock()
 
 
 # A global cache of table info
-_TABLE_CACHE = TTLCache(maxsize=1024, ttl=600)
-_TABLE_LOCK = Lock()
+_REFLECTED_TABLE_CACHE = TTLCache(maxsize=1024, ttl=600)
+_REFLECTED_TABLE_LOCK = Lock()
 
 
 def make_engine_event_handler(event_name, engine_name):
@@ -61,6 +63,17 @@ class ExecutionResult:
     rows: List[RecipeRow]
 
 
+@dataclass
+class ReflectedTable:
+    """A database table that can have expressions built against it."""
+
+    table: Table
+    columns: dict
+    grammar: str
+    # A lark parser using the grammar
+    parser: Lark
+
+
 @attr.s
 class DBInfo(object):
     """An object for keeping track of SQLAlchemy objects related to a
@@ -88,8 +101,10 @@ class DBInfo(object):
             (pg_id in self.engine.name for pg_id in ("redshift", "postg", "pg"))
         )
 
-    @refreshing_cached(cache=_TABLE_CACHE, key=make_table_key, lock=_TABLE_LOCK)
-    def reflect(self, table: str) -> tuple[Table, str]:
+    @refreshing_cached(
+        cache=_REFLECTED_TABLE_CACHE, key=make_table_key, lock=_REFLECTED_TABLE_LOCK
+    )
+    def reflect(self, table: str) -> ReflectedTable:
         """Safely load a table, returning the table and a specific grammar for
         the table."""
         # sourcery skip: raise-specific-error
@@ -114,12 +129,22 @@ class DBInfo(object):
         except NoSuchTableError:
             raise
 
-        grammar = make_grammar(table)
-        return table, grammar
+        columns = make_columns_for_table(table)
+        grammar = make_grammar(table, columns=columns)
+        parser = Lark(
+            grammar,
+            parser="earley",
+            ambiguity="resolve",
+            start="col",
+            propagate_positions=True,
+        )
+        return ReflectedTable(
+            table=table, columns=columns, grammar=grammar, parser=parser
+        )
 
     def invalidate(self, table: str):
         """Remove cached information for a table"""
-        _TABLE_CACHE.pop(make_table_key(self, table), None)
+        _REFLECTED_TABLE_CACHE.pop(make_table_key(self, table), None)
 
     def execute(self, statement) -> ExecutionResult:
         from_cache = False

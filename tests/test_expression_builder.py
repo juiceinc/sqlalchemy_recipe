@@ -1,6 +1,7 @@
 """Test building sqlalchemy expressions."""
 
 import time
+from weakref import ref
 
 from lark.exceptions import GrammarError
 
@@ -19,8 +20,8 @@ class BuilderTestCase(ExpressionTestCase):
     maxDiff = None
 
     def setup_builder(self, tablename):
-        table, grammar = self.dbinfo.reflect(tablename)
-        return SQLAlchemyBuilder(self.dbinfo, table, grammar)
+        reflected_table = self.dbinfo.reflect(tablename)
+        return SQLAlchemyBuilder(self.dbinfo, reflected_table=reflected_table)
 
     def setUp(self):
         super().setUp()
@@ -89,8 +90,8 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         """
 
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(field, enforce_aggregation=True, debug=True)
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            resp = self.builder.parse(field, enforce_aggregation=True, debug=True)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
     def test_data_type(self):
         good_examples = """
@@ -113,8 +114,8 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         """
 
         for field, expected_data_type in self.examples(good_examples):
-            _, data_type = self.builder.parse(field)
-            self.assertEqual(data_type, expected_data_type)
+            resp = self.builder.parse(field)
+            self.assertEqual(resp.datatype, expected_data_type)
 
     def test_disallow_literals(self):
         examples = """
@@ -142,8 +143,8 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         """
         b = self.setup_builder("census")
         for field, expected_data_type in self.examples(type_examples):
-            _, data_type = b.parse(field)
-            self.assertEqual(data_type, expected_data_type)
+            resp = b.parse(field)
+            self.assertEqual(resp.datatype, expected_data_type)
 
         sql_examples = """
         [age]                             -> census.age
@@ -152,8 +153,8 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         [state] + [sex]                   -> census.state || census.sex
         """
         for field, expected_sql in self.examples(sql_examples):
-            expr, _ = b.parse(field, debug=True)
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            resp = b.parse(field, debug=True)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
 
 class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
@@ -166,13 +167,13 @@ class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
         coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('year', datatypes.test_date), '2020-01-01')
         """
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(
+            resp = self.builder.parse(
                 field,
                 enforce_aggregation=True,
                 debug=True,
                 convert_dates_with="year_conv",
             )
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
         good_examples = """
         [test_date]                         -> date_trunc('month', datatypes.test_date)
@@ -180,13 +181,13 @@ class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
         coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('month', datatypes.test_date), '2020-01-01')
         """
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(
+            resp = self.builder.parse(
                 field,
                 enforce_aggregation=True,
                 debug=True,
                 convert_dates_with="month_conv",
             )
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
         # If the date conversion doesn't exist, don't convert
         good_examples = """
@@ -195,13 +196,13 @@ class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
         coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
         """
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(
+            resp = self.builder.parse(
                 field,
                 enforce_aggregation=True,
                 debug=True,
                 convert_dates_with="a_potato",
             )
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
 
 class TestDataTypesTable(BuilderTestCase):
@@ -251,8 +252,8 @@ class TestDataTypesTable(BuilderTestCase):
 
         for field, expected_sql in self.examples(good_examples):
             print(expected_sql)
-            expr, _ = self.builder.parse(field, debug=True)
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            resp = self.builder.parse(field, debug=True)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
     def test_division_and_math(self):
         """These examples should all succeed"""
@@ -282,8 +283,8 @@ class TestDataTypesTable(BuilderTestCase):
         """
 
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(field, debug=True)
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            resp = self.builder.parse(field, debug=True)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
     def test_arrays(self):
         good_examples = """
@@ -301,8 +302,8 @@ class TestDataTypesTable(BuilderTestCase):
         """
 
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(field, debug=False)
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            resp = self.builder.parse(field, debug=False)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
     def test_boolean(self):
         good_examples = """
@@ -332,16 +333,16 @@ class TestDataTypesTable(BuilderTestCase):
         """
 
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(field, debug=True)
+            resp = self.builder.parse(field, debug=True)
 
-            if expr_to_str(expr) != expected_sql:
+            if expr_to_str(resp.expression) != expected_sql:
                 print("===" * 10)
-                print(expr_to_str(expr))
+                print(expr_to_str(resp.expression))
                 print("vs")
                 print(expected_sql)
                 print("===" * 10)
 
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
     def test_failure(self):
         """These examples should all fail"""
@@ -491,7 +492,7 @@ avg([test_date])
 class DataTypesTableDatesTestCase(BuilderTestCase):
     @freeze_time("2020-01-14 09:21:34", tz_offset=utc_offset)
     def test_dates(self):
-        good_examples = f"""
+        good_examples = """
         [test_date]           -> datatypes.test_date
         [test_date] > date("2020-01-01")     -> datatypes.test_date > '2020-01-01'
         [test_date] > date("today")          -> datatypes.test_date > '2020-01-14'
@@ -514,8 +515,8 @@ class DataTypesTableDatesTestCase(BuilderTestCase):
         """
 
         for field, expected_sql in self.examples(good_examples):
-            expr, _ = self.builder.parse(field, debug=True)
-            self.assertEqual(expr_to_str(expr), expected_sql)
+            resp = self.builder.parse(field, debug=True)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
 
     def test_failure(self):
         """These examples should all fail"""

@@ -1,8 +1,13 @@
+"""Validate and parse expressions into SQLAlchemy expressions"""
+
+from dataclasses import dataclass
 import functools
 from sqlalchemy import Table, func
-from sqlalchemy_recipe.dbinfo import DBInfo
-from lark import GrammarError, Lark, Transformer, Tree, Visitor, v_args
+from sqlalchemy.sql.expression import ClauseElement
+from sqlalchemy_recipe.dbinfo import DBInfo, ReflectedTable
+from lark import GrammarError, Lark
 from datetime import datetime, date
+from sqlalchemy_recipe.expression.datatype import DataType
 
 from sqlalchemy_recipe.expression.grammar import make_columns_for_table
 from .transformer import TransformToSQLAlchemyExpression
@@ -11,42 +16,28 @@ from .validator import SQLALchemyValidator
 BUILDER_CACHE = {}
 
 
+@dataclass
+class BuilderResponse:
+    datatype: DataType
+    expression: ClauseElement
+
+
 class SQLAlchemyBuilder:
-    @classmethod
-    def get_builder(cls, selectable):
-        if selectable not in BUILDER_CACHE:
-            BUILDER_CACHE[selectable] = cls(selectable)
-        return BUILDER_CACHE[selectable]
-
-    @classmethod
-    def clear_builder_cache(cls):
-        global BUILDER_CACHE
-        BUILDER_CACHE = {}
-
-    def __init__(self, dbinfo: DBInfo, table: Table, grammar: str):
-        """Parse a recipe field by building a custom grammar that
-        uses the colums in a selectable.
+    def __init__(self, dbinfo: DBInfo, reflected_table: ReflectedTable):
+        """Parse an expression by building a custom grammar that
+        uses the columns in a table.
 
         Args:
-            selectable (Table): A SQLAlchemy selectable
+            dbinfo (DBInfo): _description_
+            table (Table): _description_
+            grammar (str): _description_
         """
         self.dbinfo = dbinfo
-        self.table = table
-        self.grammar = grammar
+        self.reflected_table = reflected_table
         self.drivername = self.dbinfo.engine.url.drivername
 
-        self.parser = Lark(
-            self.grammar,
-            parser="earley",
-            ambiguity="resolve",
-            start="col",
-            propagate_positions=True,
-            # predict_all=True,
-        )
-        columns = make_columns_for_table(self.table)
-
         self.transformer = TransformToSQLAlchemyExpression(
-            self.table, columns, self.dbinfo.engine.url.drivername
+            reflected_table, self.dbinfo.engine.url.drivername
         )
 
         # The data type of the last parsed expression
@@ -55,13 +46,13 @@ class SQLAlchemyBuilder:
     @functools.lru_cache(maxsize=None)
     def parse(
         self,
-        text,
-        forbid_aggregation=False,
-        enforce_aggregation=False,
-        debug=False,
+        text: str,
+        forbid_aggregation: bool = False,
+        enforce_aggregation: bool = False,
+        debug: bool = False,
         convert_dates_with=None,
         convert_datetimes_with=None,
-    ):
+    ) -> BuilderResponse:
         """Return a parse tree for text
 
         Args:
@@ -82,7 +73,7 @@ class SQLAlchemyBuilder:
                 ColumnElement: A SQLALchemy expression
                 DataType: The datatype of the expression (bool, date, datetime, num, str)
         """
-        tree = self.parser.parse(text, start="col")
+        tree = self.reflected_table.parser.parse(text, start="col")
         validator = SQLALchemyValidator(
             text, forbid_aggregation, self.dbinfo.engine.url.drivername
         )
@@ -113,6 +104,8 @@ class SQLAlchemyBuilder:
                 and not validator.found_aggregation
                 and self.last_datatype == "num"
             ):
-                return (func.sum(expr), self.last_datatype)
+                return BuilderResponse(
+                    expression=func.sum(expr), datatype=self.last_datatype
+                )
             else:
-                return (expr, self.last_datatype)
+                return BuilderResponse(expression=expr, datatype=self.last_datatype)
