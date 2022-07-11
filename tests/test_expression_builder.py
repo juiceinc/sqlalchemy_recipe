@@ -6,7 +6,7 @@ from lark.exceptions import GrammarError
 
 from sqlalchemy_recipe.expression.builder import SQLAlchemyBuilder
 
-# from freezegun import freeze_time
+from freezegun import freeze_time
 from .test_expression_base import ExpressionTestCase
 from .utils import expr_to_str
 
@@ -17,6 +17,14 @@ class BuilderTestCase(ExpressionTestCase):
     """Add tools for building test cases from strings"""
 
     maxDiff = None
+
+    def setup_builder(self, tablename):
+        table, grammar = self.dbinfo.reflect(tablename)
+        return SQLAlchemyBuilder(self.dbinfo, table, grammar)
+
+    def setUp(self):
+        super().setUp()
+        self.builder = self.setup_builder("datatypes")
 
     def examples(self, input_rows):
         """Take input where each line looks like
@@ -66,14 +74,6 @@ class BuilderTestCase(ExpressionTestCase):
 
 
 class SQLAlchemyBuilderTestCase(BuilderTestCase):
-    def setup_builder(self, tablename):
-        table, grammar = self.dbinfo.reflect(tablename)
-        return SQLAlchemyBuilder(self.dbinfo, table, grammar)
-
-    def setUp(self):
-        super().setUp()
-        self.builder = self.setup_builder("datatypes")
-
     def test_drivername(self):
         self.assertEqual(self.dbinfo.engine.url.drivername, "sqlite")
 
@@ -156,451 +156,395 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
             self.assertEqual(expr_to_str(expr), expected_sql)
 
 
-# class TestSQLAlchemyBuilderConvertDates(GrammarTestCase):
-#     def test_enforce_convert_dates(self):
-#         """Enforce aggregation will wrap the function in a sum if no aggregation was seen"""
+class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
+    def test_enforce_convert_dates(self):
+        """Enforce aggregation will wrap the function in a sum if no aggregation was seen"""
 
-#         good_examples = """
-#         [test_date]                       -> date_trunc('year', datatypes.test_date)
-#         test_date                         -> date_trunc('year', datatypes.test_date)
-#         coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('year', datatypes.test_date), '2020-01-01')
-#         """
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(
-#                 field,
-#                 enforce_aggregation=True,
-#                 debug=True,
-#                 convert_dates_with="year_conv",
-#             )
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+        good_examples = """
+        [test_date]                         -> date_trunc('year', datatypes.test_date)
+        [test_date]                         -> date_trunc('year', datatypes.test_date)
+        coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('year', datatypes.test_date), '2020-01-01')
+        """
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(
+                field,
+                enforce_aggregation=True,
+                debug=True,
+                convert_dates_with="year_conv",
+            )
+            self.assertEqual(expr_to_str(expr), expected_sql)
 
-#         good_examples = """
-#         [test_date]                       -> date_trunc('month', datatypes.test_date)
-#         test_date                         -> date_trunc('month', datatypes.test_date)
-#         coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('month', datatypes.test_date), '2020-01-01')
-#         """
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(
-#                 field,
-#                 enforce_aggregation=True,
-#                 debug=True,
-#                 convert_dates_with="month_conv",
-#             )
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+        good_examples = """
+        [test_date]                         -> date_trunc('month', datatypes.test_date)
+        [test_date]                         -> date_trunc('month', datatypes.test_date)
+        coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('month', datatypes.test_date), '2020-01-01')
+        """
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(
+                field,
+                enforce_aggregation=True,
+                debug=True,
+                convert_dates_with="month_conv",
+            )
+            self.assertEqual(expr_to_str(expr), expected_sql)
 
-#         # If the date conversion doesn't exist, don't convert
-#         good_examples = """
-#         [test_date]                       -> datatypes.test_date
-#         test_date                         -> datatypes.test_date
-#         coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
-#         """
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(
-#                 field,
-#                 enforce_aggregation=True,
-#                 debug=True,
-#                 convert_dates_with="a_potato",
-#             )
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-
-# class TestDataTypesTable(GrammarTestCase):
-#     def test_fields_and_addition(self):
-#         """These examples should all succeed"""
-
-#         good_examples = """
-#         [score]                         -> datatypes.score
-#         [ScORE]                         -> datatypes.score
-#         [ScORE] + [ScORE]               -> datatypes.score + datatypes.score
-#         [score] + 2.0                   -> datatypes.score + 2.0
-#         substr(department, 5)           -> substr(datatypes.department, 5)
-#         substr(department, 5, 2)        -> substr(datatypes.department, 5, 2)
-#         #([score] + 2.0) / [score]                   -> datatypes.score + 2.0
-#         [username] + [department]       -> datatypes.username || datatypes.department
-#         "foo" + [department]            -> 'foo' || datatypes.department
-#         1.0 + [score]                   -> 1.0 + datatypes.score
-#         1.0 + [score] + [score]         -> 1.0 + datatypes.score + datatypes.score
-#         -0.1 * [score] + 600            -> -0.1 * datatypes.score + 600
-#         -0.1 * [score] + 600.0          -> -0.1 * datatypes.score + 600.0
-#         [score] = [score]               -> datatypes.score = datatypes.score
-#         [score] >= 2.0                  -> datatypes.score >= 2.0
-#         2.0 <= [score]                  -> datatypes.score >= 2.0
-#         NOT [score] >= 2.0              -> datatypes.score < 2.0
-#         NOT 2.0 <= [score]              -> datatypes.score < 2.0
-#         [score] > 3 AND true            -> datatypes.score > 3
-#         valid_score AND [score] > 3     -> datatypes.valid_score AND datatypes.score > 3
-#         # This is a bad case
-#         # what happens is TRUE AND score > 3 gets simplified to score > 3
-#         valid_score = TRUE AND score > 3 -> datatypes.valid_score = (datatypes.score > 3)
-#         # Parentheses make this work
-#         (valid_score = TRUE) AND score > 3 -> datatypes.valid_score = true AND datatypes.score > 3
-#         [score] = Null                  -> datatypes.score IS NULL
-#         [score] IS NULL                 -> datatypes.score IS NULL
-#         [score] != Null                 -> datatypes.score IS NOT NULL
-#         [score] <> Null                 -> datatypes.score IS NOT NULL
-#         [score] IS NOT nULL             -> datatypes.score IS NOT NULL
-#         [department] like "foo"         -> datatypes.department LIKE '%foo%'
-#         [department] ilike "foo%"       -> lower(datatypes.department) LIKE lower('foo%')
-#         "F" + [department] ILIKE "f__"  -> lower('F' || datatypes.department) LIKE lower('f__')
-#         string([score])                 -> CAST(datatypes.score AS VARCHAR)
-#         coalesce([score], 0.14)         -> coalesce(datatypes.score, 0.14)
-#         int([department])               -> CAST(datatypes.department AS INTEGER)
-#         coalesce([department], "moo")   -> coalesce(datatypes.department, 'moo')
-#         coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-#     def test_division_and_math(self):
-#         """These examples should all succeed"""
-
-#         good_examples = """
-#         [score] / 2                      -> CAST(datatypes.score AS FLOAT) / 2
-#         [score] / 2.0                    -> CAST(datatypes.score AS FLOAT) / 2.0
-#         sum(score) / count(*)            -> CASE WHEN (count(*) = 0) THEN NULL ELSE CAST(sum(datatypes.score) AS FLOAT) / CAST(count(*) AS FLOAT) END
-#         [score] / 1                      -> datatypes.score
-#         sum([score] / 1)                 -> sum(datatypes.score)
-#         sum([score] / [score])           -> sum(CASE WHEN (datatypes.score = 0) THEN NULL ELSE CAST(datatypes.score AS FLOAT) / CAST(datatypes.score AS FLOAT) END)
-#         score / 2                        -> CAST(datatypes.score AS FLOAT) / 2
-#         sum(score / score)               -> sum(CASE WHEN (datatypes.score = 0) THEN NULL ELSE CAST(datatypes.score AS FLOAT) / CAST(datatypes.score AS FLOAT) END)
-#         [score] / (2/1)                  -> CAST(datatypes.score AS FLOAT) / 2
-#         [score] / (0.5/0.25)             -> CAST(datatypes.score AS FLOAT) / 2.0
-#         [score] / (0.5 /    0.25)        -> CAST(datatypes.score AS FLOAT) / 2.0
-#         [score] * (2*3)                  -> datatypes.score * 6
-#         [score] * (2*score)              -> datatypes.score * 2 * datatypes.score
-#         [score] * (2 / score)            -> datatypes.score * CASE WHEN (datatypes.score = 0) THEN NULL ELSE 2 / CAST(datatypes.score AS FLOAT) END
-#         [score] / (10-7)                 -> CAST(datatypes.score AS FLOAT) / 3
-#         [score] / (10-9)                 -> datatypes.score
-#         ([score] + [score]) / ([score] - [score]) -> CASE WHEN (datatypes.score - datatypes.score = 0) THEN NULL ELSE CAST(datatypes.score + datatypes.score AS FLOAT) / CAST(datatypes.score - datatypes.score AS FLOAT) END
-#         # Order of operations has: score + (3 + (5 / 5))
-#         score + (3 + 5 / (10 - 5))       -> datatypes.score + 4.0
-#         # Order of operations has: score + (3 + 0.5 - 5)
-#         score + (3 + 5 / 10 - 5)         -> datatypes.score + -1.5
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-#     def test_no_brackets(self):
-#         """Brackets are optional around field names"""
-
-#         good_examples = """
-#         score                         -> datatypes.score
-#         ScORE                         -> datatypes.score
-#         ScORE + ScORE                 -> datatypes.score + datatypes.score
-#         score + 2.0                   -> datatypes.score + 2.0
-#         username + department         -> datatypes.username || datatypes.department
-#         "foo" + department            -> 'foo' || datatypes.department
-#         1.0 + score                   -> 1.0 + datatypes.score
-#         1.0 + score + score           -> 1.0 + datatypes.score + datatypes.score
-#         -0.1 * score + 600            -> -0.1 * datatypes.score + 600
-#         -0.1 * score + 600.0          -> -0.1 * datatypes.score + 600.0
-#         score = score                 -> datatypes.score = datatypes.score
-#         score >= 2.0                  -> datatypes.score >= 2.0
-#         2.0 <= score                  -> datatypes.score >= 2.0
-#         NOT score >= 2.0              -> datatypes.score < 2.0
-#         NOT 2.0 <= score              -> datatypes.score < 2.0
-#         score > 3 AND true            -> datatypes.score > 3
-#         score = Null                  -> datatypes.score IS NULL
-#         score IS NULL                 -> datatypes.score IS NULL
-#         score != Null                 -> datatypes.score IS NOT NULL
-#         score <> Null                 -> datatypes.score IS NOT NULL
-#         score IS NOT nULL             -> datatypes.score IS NOT NULL
-#         department like "foo"         -> datatypes.department LIKE '%foo%'
-#         department ilike "foo%"       -> lower(datatypes.department) LIKE lower('foo%')
-#         "F" + department ILIKE "f__"  -> lower('F' || datatypes.department) LIKE lower('f__')
-#         string(score)                 -> CAST(datatypes.score AS VARCHAR)
-#         coalesce(score, 0.14)         -> coalesce(datatypes.score, 0.14)
-#         int(department)               -> CAST(datatypes.department AS INTEGER)
-#         coalesce(department, "moo")   -> coalesce(datatypes.department, 'moo')
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-#     def test_arrays(self):
-#         good_examples = """
-#         [score] NOT in (1,2,3)            -> datatypes.score NOT IN (1, 2, 3)
-#         [score] In (1,2,   3.0)           -> datatypes.score IN (1, 2, 3.0)
-#         [score] In (1)                    -> datatypes.score IN (1)
-#         NOT [score] In (1)                -> datatypes.score NOT IN (1)
-#         NOT NOT [score] In (1)            -> datatypes.score IN (1)
-#         [department] In ("A", "B")        -> datatypes.department IN ('A', 'B')
-#         [department] In ("A", "B",)       -> datatypes.department IN ('A', 'B')
-#         [department] iN  (  "A",    "B" ) -> datatypes.department IN ('A', 'B')
-#         [department] In ("A",)            -> datatypes.department IN ('A')
-#         [department] In ("A")             -> datatypes.department IN ('A')
-#         [department] + [username] In ("A", "B")        -> datatypes.department || datatypes.username IN ('A', 'B')
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=False)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-#     def test_boolean(self):
-#         good_examples = """
-#         [score] > 3                                           -> datatypes.score > 3
-#         [department] > "b"                                    -> datatypes.department > 'b'
-#         string([score]) like "9_"                             -> CAST(datatypes.score AS VARCHAR) LIKE '9_'
-#         [score] > 3 AND [score] < 5                           -> datatypes.score > 3 AND datatypes.score < 5
-#         [score] > 3 AND [score] < 5 AND [score] = 4           -> datatypes.score > 3 AND datatypes.score < 5 AND datatypes.score = 4
-#         [score] > 3 AND True                                  -> datatypes.score > 3
-#         [score] > 3 AND False                                 -> false
-#         NOT [score] > 3 AND [score] < 5                       -> NOT (datatypes.score > 3 AND datatypes.score < 5)
-#         NOT ([score] > 3 AND [score] < 5)                     -> NOT (datatypes.score > 3 AND datatypes.score < 5)
-#         (NOT [score] > 3) AND [score] < 5                     -> datatypes.score <= 3 AND datatypes.score < 5
-#         # The following is a unexpected result but not sure how to fix it
-#         NOT [score] > 3 AND NOT [score] < 5                   ->  NOT (datatypes.score > 3 AND datatypes.score >= 5)
-#         [score] > 3 OR [score] < 5                            -> datatypes.score > 3 OR datatypes.score < 5
-#         [score] > 3 AND [score] < 5 OR [score] = 4            -> datatypes.score > 3 AND datatypes.score < 5 OR datatypes.score = 4
-#         [score] > 3 AND ([score] < 5 OR [score] = 4)          -> datatypes.score > 3 AND (datatypes.score < 5 OR datatypes.score = 4)
-#         [score] > 3 AND [score] < 5 OR [score] = 4 AND [score] = 3 -> datatypes.score > 3 AND datatypes.score < 5 OR datatypes.score = 4 AND datatypes.score = 3
-#         [score] > 3 AND ([score] < 5 OR [score] = 4) AND [score] = 3 -> datatypes.score > 3 AND (datatypes.score < 5 OR datatypes.score = 4) AND datatypes.score = 3
-#         [score] between 1 and 3                               -> datatypes.score BETWEEN 1 AND 3
-#         [score] between [score] and [score]                   -> datatypes.score BETWEEN datatypes.score AND datatypes.score
-#         [username] between "a" and "z"                        -> datatypes.username BETWEEN 'a' AND 'z'
-#         [username] between [department] and "z"               -> datatypes.username BETWEEN datatypes.department AND 'z'
-#         count_distinct([score] > 80)                          -> count(DISTINCT (datatypes.score > 80))
-#         count([score] > 80)                                   -> count(datatypes.score > 80)
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-
-#             if expr_to_str(expr) != expected_sql:
-#                 print("===" * 10)
-#                 print(expr_to_str(expr))
-#                 print("vs")
-#                 print(expected_sql)
-#                 print("===" * 10)
-
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-#     def test_failure(self):
-#         """These examples should all fail"""
-
-#         bad_examples = """
-# unknown ->
-# unknown is not a valid column name
-
-# unknown
-# ^
-# ===
-# [scores] ->
-# scores is not a valid column name
-
-# [scores]
-#  ^
-# ===
-# [scores] + -1.0 ->
-# scores is not a valid column name
-
-# [scores] + -1.0
-#  ^
-# unknown_col and num can not be added together
-
-# [scores] + -1.0
-#  ^
-# ===
-# 2.0 + [scores] ->
-# scores is not a valid column name
-
-# 2.0 + [scores]
-#        ^
-# num and unknown_col can not be added together
-
-# 2.0 + [scores]
-# ^
-# ===
-# [foo_b] ->
-# foo_b is not a valid column name
-
-# [foo_b]
-#  ^
-# ===
-# [username] + [score] ->
-# string and num can not be added together
-
-# [username] + [score]
-#  ^
-# ===
-# [username]-[score] ->
-# string and num can not be subtracted
-
-# [username]-[score]
-#  ^
-# ===
-# [username] * [score] ->
-# string and num can not be multiplied together
-
-# [username] * [score]
-#  ^
-# ===
-# [score] * [username] ->
-# num and string can not be multiplied together
-
-# [score] * [username]
-#  ^
-# ===
-# [score]   + [department] ->
-# num and string can not be added together
-
-# [score]   + [department]
-#  ^
-# ===
-# [score] = [department] ->
-# Can't compare num to str
-
-# [score] = [department]
-#  ^
-# ===
-# [score] = "5" ->
-# Can't compare num to str
-
-# [score] = "5"
-#  ^
-# ===
-# [department] = 3.24 ->
-# Can't compare str to num
-
-# [department] = 3.24
-#  ^
-# ===
-# [department] In ("A", 2) ->
-# An array may not contain both strings and numbers
-
-# [department] In ("A", 2)
-#                  ^
-# ===
-# [username] NOT IN (2, "B") ->
-# An array may not contain both strings and numbers
-
-# [username] NOT IN (2, "B")
-#                    ^
-# ===
-# 1 in (1,2,3) ->
-# Must be a column or expression
-
-# 1 in (1,2,3)
-# ^
-# ===
-# NOT [department] ->
-# NOT requires a boolean value
-
-# NOT [department]
-# ^
-# ===
-# [score] / 0 ->
-# When dividing, the denominator can not be zero
-# ===
-# [score] / (10-10) ->
-# When dividing, the denominator can not be zero
-# ===
-# avg(department) ->
-# A str can not be aggregated using avg.
-
-# avg(department)
-# ^
-# ===
-# avg(test_date) ->
-# A date can not be aggregated using avg.
-
-# avg(test_date)
-# ^
-# """
-
-#         for field, expected_error in self.bad_examples(bad_examples):
-#             with self.assertRaises(Exception) as e:
-#                 self.builder.parse(field, debug=True)
-#             if str(e.exception) != expected_error:
-#                 print("===" * 10)
-#                 print(str(e.exception))
-#                 print("vs")
-#                 print(expected_error)
-#                 print("===" * 10)
-#             self.assertEqual(str(e.exception).strip(), expected_error.strip())
+        # If the date conversion doesn't exist, don't convert
+        good_examples = """
+        [test_date]                         -> datatypes.test_date
+        [test_date]                         -> datatypes.test_date
+        coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
+        """
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(
+                field,
+                enforce_aggregation=True,
+                debug=True,
+                convert_dates_with="a_potato",
+            )
+            self.assertEqual(expr_to_str(expr), expected_sql)
 
 
-# class TestDataTypesTableDates(GrammarTestCase):
-#     @freeze_time("2020-01-14 09:21:34", tz_offset=utc_offset)
-#     def test_dates(self):
-#         good_examples = f"""
-#         [test_date]           -> datatypes.test_date
-#         [test_date] > date("2020-01-01")     -> datatypes.test_date > '2020-01-01'
-#         [test_date] > date("today")          -> datatypes.test_date > '2020-01-14'
-#         date("today") < [test_date]          -> datatypes.test_date > '2020-01-14'
-#         [test_date] > date("1 day ago")      -> datatypes.test_date > '2020-01-13'
-#         [test_date] > date("1 day")          -> datatypes.test_date > '2020-01-13'
-#         [test_date] > date("1 days ago")     -> datatypes.test_date > '2020-01-13'
-#         [test_date] between date("2020-01-01") and date("2020-01-30")      -> datatypes.test_date BETWEEN '2020-01-01' AND '2020-01-30'
-#         [test_date] IS last year              -> datatypes.test_date BETWEEN '2019-01-01' AND '2019-12-31'
-#         [test_datetime] > date("1 days ago")  -> datatypes.test_datetime > '2020-01-13 09:21:34'
-#         [test_datetime] between date("2020-01-01") and date("2020-01-30")      -> datatypes.test_datetime BETWEEN '2020-01-01 00:00:00' AND '2020-01-30 23:59:59.999999'
-#         [test_datetime] IS last year          -> datatypes.test_datetime BETWEEN '2019-01-01 00:00:00' AND '2019-12-31 23:59:59.999999'
-#         [test_datetime] IS next year          -> datatypes.test_datetime BETWEEN '2021-01-01 00:00:00' AND '2021-12-31 23:59:59.999999'
-#         # The date() wrapper function is optional
-#         [test_date] > "1 days ago"            -> datatypes.test_date > '2020-01-13'
-#         [test_datetime] > "1 days ago"        -> datatypes.test_datetime > '2020-01-13 09:21:34'
-#         [test_date] between "30 days ago" and "now" -> datatypes.test_date BETWEEN '2019-12-15' AND '2020-01-14'
-#         [test_date] between date("30 days ago") and date("now") -> datatypes.test_date BETWEEN '2019-12-15' AND '2020-01-14'
-#         [test_datetime] between date("30 days ago") and date("now") -> datatypes.test_datetime BETWEEN '2019-12-15 09:21:34' AND '2020-01-14 09:21:34'
-#         """
+class TestDataTypesTable(BuilderTestCase):
+    def test_fields_and_addition(self):
+        """These examples should all succeed"""
 
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+        good_examples = """
+        [score]                         -> datatypes.score
+        [ScORE]                         -> datatypes.score
+        [ScORE] + [ScORE]               -> datatypes.score + datatypes.score
+        [score] + 2.0                   -> datatypes.score + 2.0
+        substr([department], 5)         -> substr(datatypes.department, 5)
+        substr([department], 5, 2)      -> substr(datatypes.department, 5, 2)
+        #([score] + 2.0) / [score]                   -> datatypes.score + 2.0
+        [username] + [department]       -> datatypes.username || datatypes.department
+        "foo" + [department]            -> 'foo' || datatypes.department
+        1.0 + [score]                   -> 1.0 + datatypes.score
+        1.0 + [score] + [score]         -> 1.0 + datatypes.score + datatypes.score
+        -0.1 * [score] + 600            -> -0.1 * datatypes.score + 600
+        -0.1 * [score] + 600.0          -> -0.1 * datatypes.score + 600.0
+        [score] = [score]               -> datatypes.score = datatypes.score
+        [score] >= 2.0                  -> datatypes.score >= 2.0
+        2.0 <= [score]                  -> datatypes.score >= 2.0
+        NOT [score] >= 2.0              -> datatypes.score < 2.0
+        NOT 2.0 <= [score]              -> datatypes.score < 2.0
+        [score] > 3 AND true            -> datatypes.score > 3
+        [valid_score] AND [score] > 3   -> datatypes.valid_score AND datatypes.score > 3
+        # This is a bad case
+        # what happens is TRUE AND score > 3 gets simplified to score > 3
+        [valid_score] = TRUE AND [score] > 3 -> datatypes.valid_score = (datatypes.score > 3)
+        # Parentheses make this work
+        ([valid_score] = TRUE) AND [score] > 3 -> datatypes.valid_score = true AND datatypes.score > 3
+        [score] = Null                  -> datatypes.score IS NULL
+        [score] IS NULL                 -> datatypes.score IS NULL
+        [score] != Null                 -> datatypes.score IS NOT NULL
+        [score] <> Null                 -> datatypes.score IS NOT NULL
+        [score] IS NOT nULL             -> datatypes.score IS NOT NULL
+        [department] like "foo"         -> datatypes.department LIKE '%foo%'
+        [department] ilike "foo%"       -> lower(datatypes.department) LIKE lower('foo%')
+        "F" + [department] ILIKE "f__"  -> lower('F' || datatypes.department) LIKE lower('f__')
+        string([score])                 -> CAST(datatypes.score AS VARCHAR)
+        coalesce([score], 0.14)         -> coalesce(datatypes.score, 0.14)
+        int([department])               -> CAST(datatypes.department AS INTEGER)
+        coalesce([department], "moo")   -> coalesce(datatypes.department, 'moo')
+        coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
+        """
 
-#     def test_dates_without_freetime(self):
-#         # Can't tests with date conversions and freeze time :/
-#         good_examples = f"""
-#         month([test_date]) > date("2020-12-30")          -> date_trunc('month', datatypes.test_date) > '2020-12-30'
-#         month([test_datetime]) > date("2020-12-30")      -> date_trunc('month', datatypes.test_datetime) > '2020-12-30'
-#         date("2020-12-30") < month([test_datetime])      -> date_trunc('month', datatypes.test_datetime) > '2020-12-30'
-#         day([test_date]) > date("2020-12-30")            -> date_trunc('day', datatypes.test_date) > '2020-12-30'
-#         week([test_date]) > date("2020-12-30")           -> date_trunc('week', datatypes.test_date) > '2020-12-30'
-#         quarter([test_date]) > date("2020-12-30")        -> date_trunc('quarter', datatypes.test_date) > '2020-12-30'
-#         year([test_date]) > date("2020-12-30")           -> date_trunc('year', datatypes.test_date) > '2020-12-30'
-#         date([test_datetime])                            -> date_trunc('day', datatypes.test_datetime)
-#         date(2020, 1, 1)                                 -> date(2020, 1, 1)
-#         month(date(2020, 1, 1))                          -> date_trunc('month', date(2020, 1, 1))
-#         """
+        for field, expected_sql in self.examples(good_examples):
+            print(expected_sql)
+            expr, _ = self.builder.parse(field, debug=True)
+            self.assertEqual(expr_to_str(expr), expected_sql)
 
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+    def test_division_and_math(self):
+        """These examples should all succeed"""
 
-#     def test_failure(self):
-#         """These examples should all fail"""
+        good_examples = """
+        [score] / 2                      -> CAST(datatypes.score AS FLOAT) / 2
+        [score] / 2.0                    -> CAST(datatypes.score AS FLOAT) / 2.0
+        sum([score]) / count(*)            -> CASE WHEN (count(*) = 0) THEN NULL ELSE CAST(sum(datatypes.score) AS FLOAT) / CAST(count(*) AS FLOAT) END
+        [score] / 1                      -> datatypes.score
+        sum([score] / 1)                 -> sum(datatypes.score)
+        sum([score] / [score])           -> sum(CASE WHEN (datatypes.score = 0) THEN NULL ELSE CAST(datatypes.score AS FLOAT) / CAST(datatypes.score AS FLOAT) END)
+        [score] / 2                        -> CAST(datatypes.score AS FLOAT) / 2
+        sum([score] / [score])               -> sum(CASE WHEN (datatypes.score = 0) THEN NULL ELSE CAST(datatypes.score AS FLOAT) / CAST(datatypes.score AS FLOAT) END)
+        [score] / (2/1)                  -> CAST(datatypes.score AS FLOAT) / 2
+        [score] / (0.5/0.25)             -> CAST(datatypes.score AS FLOAT) / 2.0
+        [score] / (0.5 /    0.25)        -> CAST(datatypes.score AS FLOAT) / 2.0
+        [score] * (2*3)                  -> datatypes.score * 6
+        [score] * (2*[score])              -> datatypes.score * 2 * datatypes.score
+        [score] * (2 / [score])            -> datatypes.score * CASE WHEN (datatypes.score = 0) THEN NULL ELSE 2 / CAST(datatypes.score AS FLOAT) END
+        [score] / (10-7)                 -> CAST(datatypes.score AS FLOAT) / 3
+        [score] / (10-9)                 -> datatypes.score
+        ([score] + [score]) / ([score] - [score]) -> CASE WHEN (datatypes.score - datatypes.score = 0) THEN NULL ELSE CAST(datatypes.score + datatypes.score AS FLOAT) / CAST(datatypes.score - datatypes.score AS FLOAT) END
+        # Order of operations has: score + (3 + (5 / 5))
+        [score] + (3 + 5 / (10 - 5))       -> datatypes.score + 4.0
+        # Order of operations has: score + (3 + 0.5 - 5)
+        [score] + (3 + 5 / 10 - 5)         -> datatypes.score + -1.5
+        """
 
-#         bad_examples = """
-# [test_date] > date("1 day from now") ->
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(field, debug=True)
+            self.assertEqual(expr_to_str(expr), expected_sql)
 
-# Can't convert '1 day from now' to a date.
-# ===
-# [test_date] between date("2020-01-01") and 7 ->
-# When using between, the column (date) and between values (date, num) must be the same data type.
+    def test_arrays(self):
+        good_examples = """
+        [score] NOT in (1,2,3)            -> (datatypes.score NOT IN (1, 2, 3))
+        [score] In (1,2,   3.0)           -> datatypes.score IN (1, 2, 3)
+        [score] In (1)                    -> datatypes.score IN (1)
+        NOT [score] In (1)                -> (datatypes.score NOT IN (1))
+        NOT NOT [score] In (1)            -> datatypes.score IN (1)
+        [department] In ("A", "B")        -> datatypes.department IN ('A', 'B')
+        [department] In ("A", "B",)       -> datatypes.department IN ('A', 'B')
+        [department] iN  (  "A",    "B" ) -> datatypes.department IN ('A', 'B')
+        [department] In ("A",)            -> datatypes.department IN ('A')
+        [department] In ("A")             -> datatypes.department IN ('A')
+        [department] + [username] In ("A", "B")        -> datatypes.department || datatypes.username IN ('A', 'B')
+        """
 
-# [test_date] between date("2020-01-01") and 7
-#  ^
-# ===
-# [test_date] between "potato" and date("2020-01-01") ->
-# Can't convert 'potato' to a date.
-# """
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(field, debug=False)
+            self.assertEqual(expr_to_str(expr), expected_sql)
 
-#         for field, expected_error in self.bad_examples(bad_examples):
-#             with self.assertRaises(Exception) as e:
-#                 self.builder.parse(field, debug=True)
-#             if str(e.exception).strip() != expected_error.strip():
-#                 print("===" * 10)
-#                 print(str(e.exception))
-#                 print("vs")
-#                 print(expected_error)
-#                 print("===" * 10)
-#             self.assertEqual(str(e.exception).strip(), expected_error.strip())
+    def test_boolean(self):
+        good_examples = """
+        [score] > 3                                           -> datatypes.score > 3
+        [department] > "b"                                    -> datatypes.department > 'b'
+        string([score]) like "9_"                             -> CAST(datatypes.score AS VARCHAR) LIKE '9_'
+        [score] > 3 AND [score] < 5                           -> datatypes.score > 3 AND datatypes.score < 5
+        [score] > 3 AND [score] < 5 AND [score] = 4           -> datatypes.score > 3 AND datatypes.score < 5 AND datatypes.score = 4
+        [score] > 3 AND True                                  -> datatypes.score > 3
+        [score] > 3 AND False                                 -> false
+        NOT [score] > 3 AND [score] < 5                       -> NOT (datatypes.score > 3 AND datatypes.score < 5)
+        NOT ([score] > 3 AND [score] < 5)                     -> NOT (datatypes.score > 3 AND datatypes.score < 5)
+        (NOT [score] > 3) AND [score] < 5                     -> datatypes.score <= 3 AND datatypes.score < 5
+        # The following is a unexpected result but not sure how to fix it
+        NOT [score] > 3 AND NOT [score] < 5                   ->  NOT (datatypes.score > 3 AND datatypes.score >= 5)
+        [score] > 3 OR [score] < 5                            -> datatypes.score > 3 OR datatypes.score < 5
+        [score] > 3 AND [score] < 5 OR [score] = 4            -> datatypes.score > 3 AND datatypes.score < 5 OR datatypes.score = 4
+        [score] > 3 AND ([score] < 5 OR [score] = 4)          -> datatypes.score > 3 AND (datatypes.score < 5 OR datatypes.score = 4)
+        [score] > 3 AND [score] < 5 OR [score] = 4 AND [score] = 3 -> datatypes.score > 3 AND datatypes.score < 5 OR datatypes.score = 4 AND datatypes.score = 3
+        [score] > 3 AND ([score] < 5 OR [score] = 4) AND [score] = 3 -> datatypes.score > 3 AND (datatypes.score < 5 OR datatypes.score = 4) AND datatypes.score = 3
+        [score] between 1 and 3                               -> datatypes.score BETWEEN 1 AND 3
+        [score] between [score] and [score]                   -> datatypes.score BETWEEN datatypes.score AND datatypes.score
+        [username] between "a" and "z"                        -> datatypes.username BETWEEN 'a' AND 'z'
+        [username] between [department] and "z"               -> datatypes.username BETWEEN datatypes.department AND 'z'
+        count_distinct([score] > 80)                          -> count(DISTINCT (datatypes.score > 80))
+        count([score] > 80)                                   -> count(datatypes.score > 80)
+        """
+
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(field, debug=True)
+
+            if expr_to_str(expr) != expected_sql:
+                print("===" * 10)
+                print(expr_to_str(expr))
+                print("vs")
+                print(expected_sql)
+                print("===" * 10)
+
+            self.assertEqual(expr_to_str(expr), expected_sql)
+
+    def test_failure(self):
+        """These examples should all fail"""
+
+        bad_examples = """
+unknown ->
+unknown is not a valid column name
+
+unknown
+^
+===
+[scores] ->
+scores is not a valid column name
+
+[scores]
+ ^
+===
+[scores] + -1.0 ->
+scores is not a valid column name
+
+[scores] + -1.0
+ ^
+unknown_col and num can not be added together
+
+[scores] + -1.0
+ ^
+===
+2.0 + [scores] ->
+scores is not a valid column name
+
+2.0 + [scores]
+       ^
+num and unknown_col can not be added together
+
+2.0 + [scores]
+^
+===
+[foo_b] ->
+foo_b is not a valid column name
+
+[foo_b]
+ ^
+===
+[username] + [score] ->
+string and num can not be added together
+
+[username] + [score]
+ ^
+===
+[username]-[score] ->
+string and num can not be subtracted
+
+[username]-[score]
+ ^
+===
+[username] * [score] ->
+string and num can not be multiplied together
+
+[username] * [score]
+ ^
+===
+[score] * [username] ->
+num and string can not be multiplied together
+
+[score] * [username]
+ ^
+===
+[score]   + [department] ->
+num and string can not be added together
+
+[score]   + [department]
+ ^
+===
+[score] = [department] ->
+Can't compare num to str
+
+[score] = [department]
+ ^
+===
+[score] = "5" ->
+Can't compare num to str
+
+[score] = "5"
+ ^
+===
+[department] = 3.24 ->
+Can't compare str to num
+
+[department] = 3.24
+ ^
+===
+[department] In ("A", 2) ->
+An array may not contain both strings and numbers
+
+[department] In ("A", 2)
+                 ^
+===
+[username] NOT IN (2, "B") ->
+An array may not contain both strings and numbers
+
+[username] NOT IN (2, "B")
+                   ^
+===
+1 in (1,2,3) ->
+Must be a column or expression
+
+1 in (1,2,3)
+^
+===
+NOT [department] ->
+NOT requires a boolean value
+
+NOT [department]
+^
+===
+[score] / 0 ->
+When dividing, the denominator can not be zero
+===
+[score] / (10-10) ->
+When dividing, the denominator can not be zero
+===
+avg([department]) ->
+A str can not be aggregated using avg.
+
+avg([department])
+^
+===
+avg([test_date]) ->
+A date can not be aggregated using avg.
+
+avg([test_date])
+^
+"""
+
+        for field, expected_error in self.bad_examples(bad_examples):
+            with self.assertRaises(Exception) as e:
+                self.builder.parse(field, debug=True)
+            if str(e.exception) != expected_error:
+                print("===" * 10)
+                print(e.exception)
+                print("vs")
+                print(expected_error)
+                print("===" * 10)
+            self.assertEqual(str(e.exception).strip(), expected_error.strip())
+
+
+class DataTypesTableDatesTestCase(BuilderTestCase):
+    @freeze_time("2020-01-14 09:21:34", tz_offset=utc_offset)
+    def test_dates(self):
+        good_examples = f"""
+        [test_date]           -> datatypes.test_date
+        [test_date] > date("2020-01-01")     -> datatypes.test_date > '2020-01-01'
+        [test_date] > date("today")          -> datatypes.test_date > '2020-01-14'
+        date("today") < [test_date]          -> datatypes.test_date > '2020-01-14'
+        [test_date] > date("1 day ago")      -> datatypes.test_date > '2020-01-13'
+        [test_date] > date("1 day")          -> datatypes.test_date > '2020-01-13'
+        [test_date] > date("1 days ago")     -> datatypes.test_date > '2020-01-13'
+        [test_date] between date("2020-01-01") and date("2020-01-30")      -> datatypes.test_date BETWEEN '2020-01-01' AND '2020-01-30'
+        [test_date] IS last year              -> datatypes.test_date BETWEEN '2019-01-01' AND '2019-12-31'
+        [test_datetime] > date("1 days ago")  -> datatypes.test_datetime > '2020-01-13 09:21:34'
+        [test_datetime] between date("2020-01-01") and date("2020-01-30")      -> datatypes.test_datetime BETWEEN '2020-01-01 00:00:00' AND '2020-01-30 23:59:59.999999'
+        [test_datetime] IS last year          -> datatypes.test_datetime BETWEEN '2019-01-01 00:00:00' AND '2019-12-31 23:59:59.999999'
+        [test_datetime] IS next year          -> datatypes.test_datetime BETWEEN '2021-01-01 00:00:00' AND '2021-12-31 23:59:59.999999'
+        # The date() wrapper function is optional
+        [test_date] > "1 days ago"            -> datatypes.test_date > '2020-01-13'
+        [test_datetime] > "1 days ago"        -> datatypes.test_datetime > '2020-01-13 09:21:34'
+        [test_date] between "30 days ago" and "now" -> datatypes.test_date BETWEEN '2019-12-15' AND '2020-01-14'
+        [test_date] between date("30 days ago") and date("now") -> datatypes.test_date BETWEEN '2019-12-15' AND '2020-01-14'
+        [test_datetime] between date("30 days ago") and date("now") -> datatypes.test_datetime BETWEEN '2019-12-15 09:21:34' AND '2020-01-14 09:21:34'
+        """
+
+        for field, expected_sql in self.examples(good_examples):
+            expr, _ = self.builder.parse(field, debug=True)
+            self.assertEqual(expr_to_str(expr), expected_sql)
+
+    def test_failure(self):
+        """These examples should all fail"""
+
+        bad_examples = """
+[test_date] > date("1 day from now") ->
+
+Can't convert '1 day from now' to a date.
+===
+[test_date] between date("2020-01-01") and 7 ->
+When using between, the column (date) and between values (date, num) must be the same data type.
+
+[test_date] between date("2020-01-01") and 7
+ ^
+===
+[test_date] between "potato" and date("2020-01-01") ->
+Can't convert 'potato' to a date.
+"""
+
+        for field, expected_error in self.bad_examples(bad_examples):
+            with self.assertRaises(Exception) as e:
+                self.builder.parse(field, debug=True)
+            if str(e.exception).strip() != expected_error.strip():
+                print("===" * 10)
+                print(e.exception)
+                print("vs")
+                print(expected_error)
+                print("===" * 10)
+            self.assertEqual(str(e.exception).strip(), expected_error.strip())
 
 
 # class TestDataTypesTableDatesInBigquery(TestDataTypesTableDates):
