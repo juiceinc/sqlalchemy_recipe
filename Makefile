@@ -6,7 +6,7 @@ docs:
 	cd docs && make html
 
 tests:
-	py.test --cov-config .coveragerc --cov=recipe tests/
+	py.test --cov-config .coveragerc --cov=sqlalchemy_recipe tests/
 
 release:
 	# 1) Make sure tests pass
@@ -16,8 +16,8 @@ release:
 	python setup.py bdist_wheel sdist
 	#twine upload -r pypi dist/*
 
-docker_build
+docker_build:
 	docker build -t sqlalchemy-recipe .
 
-docker_run
+docker_run:
 	docker run -p 8080:80 sqlalchemy-recipe
