@@ -43,17 +43,8 @@ configs = [
 class ExpressionTestCase(TestCase):
     """Grammar is constructed correctly."""
 
-    def setUp(self):
-
-        config = {
-            "sqlalchemy.url": f"sqlite:///{test_db}",
-            "sqlalchemy.pool_pre_ping": True,
-            "cache.cache_queries": True,
-            "cache.dogpile.backend": "dictionary",
-            "cache.dogpile.expiration_time": 2,
-        }
-        self.dbinfo = get_dbinfo(config)
-
+    def setup_tables(self):
+        """Build a bunch of tables with the current dbinfo"""
         basic_table = Table(
             "foo",
             self.dbinfo.metadata,
@@ -175,4 +166,14 @@ class ExpressionTestCase(TestCase):
             state_fact_table,
         ]
 
+    def setUp(self):
+        config = {
+            "sqlalchemy.url": f"sqlite:///{test_db}",
+            "sqlalchemy.pool_pre_ping": True,
+            "cache.cache_queries": True,
+            "cache.dogpile.backend": "dictionary",
+            "cache.dogpile.expiration_time": 2,
+        }
+        self.dbinfo = get_dbinfo(config)
+        self.setup_tables()
         return super().setUp()

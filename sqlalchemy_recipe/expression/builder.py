@@ -35,13 +35,9 @@ class SQLAlchemyBuilder:
         self.dbinfo = dbinfo
         self.reflected_table = reflected_table
         self.drivername = self.dbinfo.engine.url.drivername
-
         self.transformer = TransformToSQLAlchemyExpression(
             reflected_table, self.dbinfo.engine.url.drivername
         )
-
-        # The data type of the last parsed expression
-        self.last_datatype = None
 
     @functools.lru_cache(maxsize=None)
     def parse(
@@ -77,35 +73,37 @@ class SQLAlchemyBuilder:
         validator = SQLALchemyValidator(
             text, forbid_aggregation, self.dbinfo.engine.url.drivername
         )
+        # Populate errors and check aggregation
         validator.visit(tree)
-        self.last_datatype = validator.last_datatype
+        datatype = validator.last_datatype
 
         if validator.errors:
             if debug:
-                print("".join(validator.errors))
+                print("".join(map(str, validator.errors)))
                 print("Tree:\n" + tree.pretty())
-            raise GrammarError("".join(validator.errors))
+            raise GrammarError("".join(map(str, validator.errors)))
+
+        if debug:
+            print("Tree:\n" + tree.pretty())
+
+        self.transformer.text = text
+        self.transformer.convert_dates_with = convert_dates_with
+        self.transformer.convert_datetimes_with = convert_datetimes_with
+
+        # Build an expression from the bottom of the tree up.
+        expr = self.transformer.transform(tree)
+
+        # Expressions that return literal values can't be labeled
+        # Possibly we could wrap them in text() but this may be unsafe
+        # instead we will disallow them.
+        if isinstance(expr, (str, float, int, date, datetime)):
+            raise GrammarError("Must return an expression, not a constant value")
+
+        if (
+            enforce_aggregation
+            and not validator.found_aggregation
+            and datatype == "num"
+        ):
+            return BuilderResponse(expression=func.sum(expr), datatype=datatype)
         else:
-            if debug:
-                print("Tree:\n" + tree.pretty())
-            self.transformer.text = text
-            self.transformer.convert_dates_with = convert_dates_with
-            self.transformer.convert_datetimes_with = convert_datetimes_with
-            expr = self.transformer.transform(tree)
-
-            # Expressions that return literal values can't be labeled
-            # Possibly we could wrap them in text() but this may be unsafe
-            # instead we will disallow them.
-            if isinstance(expr, (str, float, int, date, datetime)):
-                raise GrammarError("Must return an expression, not a constant value")
-
-            if (
-                enforce_aggregation
-                and not validator.found_aggregation
-                and self.last_datatype == "num"
-            ):
-                return BuilderResponse(
-                    expression=func.sum(expr), datatype=self.last_datatype
-                )
-            else:
-                return BuilderResponse(expression=expr, datatype=self.last_datatype)
+            return BuilderResponse(expression=expr, datatype=datatype)

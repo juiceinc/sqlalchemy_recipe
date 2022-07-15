@@ -1,13 +1,14 @@
 """Test building sqlalchemy expressions."""
 
 import time
-from weakref import ref
-
-from lark.exceptions import GrammarError
-
-from sqlalchemy_recipe.expression.builder import SQLAlchemyBuilder
 
 from freezegun import freeze_time
+from lark.exceptions import GrammarError
+from sqlalchemy_recipe.dbinfo import get_dbinfo
+
+from sqlalchemy_recipe.expression.builder import SQLAlchemyBuilder
+from sqlalchemy_recipe.expression.grammar import is_valid_column
+
 from .test_expression_base import ExpressionTestCase
 from .utils import expr_to_str
 
@@ -73,6 +74,37 @@ class BuilderTestCase(ExpressionTestCase):
             expected_error = expected_error.strip() + "\n"
             yield field, expected_error
 
+    def check_bad_examples(self, bad_examples, builder=None, **parse_kwargs):
+        if builder is None:
+            builder = self.builder
+
+        for field, expected_error in self.bad_examples(bad_examples):
+            with self.assertRaises(Exception) as e:
+                builder.parse(field, debug=True, **parse_kwargs)
+            if str(e.exception).strip() != expected_error.strip():
+                print("===" * 10)
+                print(e.exception)
+                print("vs")
+                print(expected_error)
+                print("===" * 10)
+            self.assertEqual(str(e.exception).strip(), expected_error.strip())
+
+    def check_good_examples(self, good_examples, builder=None, **parse_kwargs):
+        if builder is None:
+            builder = self.builder
+
+        for field, expected_sql in self.examples(good_examples):
+            resp = builder.parse(field, debug=True, **parse_kwargs)
+            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+
+    def check_good_examples_datatype(self, good_examples, builder=None, **parse_kwargs):
+        if builder is None:
+            builder = self.builder
+
+        for field, expected_datatype in self.examples(good_examples):
+            resp = builder.parse(field, debug=True, **parse_kwargs)
+            self.assertEqual(resp.datatype, expected_datatype)
+
 
 class SQLAlchemyBuilderTestCase(BuilderTestCase):
     def test_drivername(self):
@@ -88,10 +120,7 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         max([ScORE] + [ScORE])          -> max(datatypes.score + datatypes.score)
         max([score]) - min([score])     -> max(datatypes.score) - min(datatypes.score)
         """
-
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(field, enforce_aggregation=True, debug=True)
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(good_examples, enforce_aggregation=True)
 
     def test_data_type(self):
         good_examples = """
@@ -112,10 +141,7 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         substr([department], 5)           -> str
         substr([department], 5, 5)        -> str
         """
-
-        for field, expected_data_type in self.examples(good_examples):
-            resp = self.builder.parse(field)
-            self.assertEqual(resp.datatype, expected_data_type)
+        self.check_good_examples_datatype(good_examples)
 
     def test_disallow_literals(self):
         examples = """
@@ -142,9 +168,7 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         max([pop2000]) > 100              -> bool
         """
         b = self.setup_builder("census")
-        for field, expected_data_type in self.examples(type_examples):
-            resp = b.parse(field)
-            self.assertEqual(resp.datatype, expected_data_type)
+        self.check_good_examples_datatype(type_examples, builder=b)
 
         sql_examples = """
         [age]                             -> census.age
@@ -152,9 +176,7 @@ class SQLAlchemyBuilderTestCase(BuilderTestCase):
         min([pop2000] + [pop2008])        -> min(census.pop2000 + census.pop2008)
         [state] + [sex]                   -> census.state || census.sex
         """
-        for field, expected_sql in self.examples(sql_examples):
-            resp = b.parse(field, debug=True)
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(sql_examples, builder=b)
 
 
 class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
@@ -166,28 +188,18 @@ class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
         [test_date]                         -> date_trunc('year', datatypes.test_date)
         coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('year', datatypes.test_date), '2020-01-01')
         """
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(
-                field,
-                enforce_aggregation=True,
-                debug=True,
-                convert_dates_with="year_conv",
-            )
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(
+            good_examples, enforce_aggregation=True, convert_dates_with="year_conv"
+        )
 
         good_examples = """
         [test_date]                         -> date_trunc('month', datatypes.test_date)
         [test_date]                         -> date_trunc('month', datatypes.test_date)
         coalesce([test_date], date("2020-01-01"))   -> coalesce(date_trunc('month', datatypes.test_date), '2020-01-01')
         """
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(
-                field,
-                enforce_aggregation=True,
-                debug=True,
-                convert_dates_with="month_conv",
-            )
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(
+            good_examples, enforce_aggregation=True, convert_dates_with="month_conv"
+        )
 
         # If the date conversion doesn't exist, don't convert
         good_examples = """
@@ -195,14 +207,9 @@ class SQLAlchemyBuilderConvertDatesTestaAse(BuilderTestCase):
         [test_date]                         -> datatypes.test_date
         coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
         """
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(
-                field,
-                enforce_aggregation=True,
-                debug=True,
-                convert_dates_with="a_potato",
-            )
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(
+            good_examples, enforce_aggregation=True, convert_dates_with="a_potato"
+        )
 
 
 class TestDataTypesTable(BuilderTestCase):
@@ -249,11 +256,7 @@ class TestDataTypesTable(BuilderTestCase):
         coalesce([department], "moo")   -> coalesce(datatypes.department, 'moo')
         coalesce([test_date], date("2020-01-01"))   -> coalesce(datatypes.test_date, '2020-01-01')
         """
-
-        for field, expected_sql in self.examples(good_examples):
-            print(expected_sql)
-            resp = self.builder.parse(field, debug=True)
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(good_examples)
 
     def test_division_and_math(self):
         """These examples should all succeed"""
@@ -281,10 +284,7 @@ class TestDataTypesTable(BuilderTestCase):
         # Order of operations has: score + (3 + 0.5 - 5)
         [score] + (3 + 5 / 10 - 5)         -> datatypes.score + -1.5
         """
-
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(field, debug=True)
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(good_examples)
 
     def test_arrays(self):
         good_examples = """
@@ -300,10 +300,7 @@ class TestDataTypesTable(BuilderTestCase):
         [department] In ("A")             -> datatypes.department IN ('A')
         [department] + [username] In ("A", "B")        -> datatypes.department || datatypes.username IN ('A', 'B')
         """
-
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(field, debug=False)
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(good_examples)
 
     def test_boolean(self):
         good_examples = """
@@ -331,18 +328,7 @@ class TestDataTypesTable(BuilderTestCase):
         count_distinct([score] > 80)                          -> count(DISTINCT (datatypes.score > 80))
         count([score] > 80)                                   -> count(datatypes.score > 80)
         """
-
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(field, debug=True)
-
-            if expr_to_str(resp.expression) != expected_sql:
-                print("===" * 10)
-                print(expr_to_str(resp.expression))
-                print("vs")
-                print(expected_sql)
-                print("===" * 10)
-
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(good_examples)
 
     def test_failure(self):
         """These examples should all fail"""
@@ -476,17 +462,7 @@ A date can not be aggregated using avg.
 avg([test_date])
 ^
 """
-
-        for field, expected_error in self.bad_examples(bad_examples):
-            with self.assertRaises(Exception) as e:
-                self.builder.parse(field, debug=True)
-            if str(e.exception) != expected_error:
-                print("===" * 10)
-                print(e.exception)
-                print("vs")
-                print(expected_error)
-                print("===" * 10)
-            self.assertEqual(str(e.exception).strip(), expected_error.strip())
+        self.check_bad_examples(bad_examples)
 
 
 class DataTypesTableDatesTestCase(BuilderTestCase):
@@ -513,10 +489,7 @@ class DataTypesTableDatesTestCase(BuilderTestCase):
         [test_date] between date("30 days ago") and date("now") -> datatypes.test_date BETWEEN '2019-12-15' AND '2020-01-14'
         [test_datetime] between date("30 days ago") and date("now") -> datatypes.test_datetime BETWEEN '2019-12-15 09:21:34' AND '2020-01-14 09:21:34'
         """
-
-        for field, expected_sql in self.examples(good_examples):
-            resp = self.builder.parse(field, debug=True)
-            self.assertEqual(expr_to_str(resp.expression), expected_sql)
+        self.check_good_examples(good_examples)
 
     def test_failure(self):
         """These examples should all fail"""
@@ -535,341 +508,269 @@ When using between, the column (date) and between values (date, num) must be the
 [test_date] between "potato" and date("2020-01-01") ->
 Can't convert 'potato' to a date.
 """
-
-        for field, expected_error in self.bad_examples(bad_examples):
-            with self.assertRaises(Exception) as e:
-                self.builder.parse(field, debug=True)
-            if str(e.exception).strip() != expected_error.strip():
-                print("===" * 10)
-                print(e.exception)
-                print("vs")
-                print(expected_error)
-                print("===" * 10)
-            self.assertEqual(str(e.exception).strip(), expected_error.strip())
+        self.check_bad_examples(bad_examples)
 
 
-# class TestDataTypesTableDatesInBigquery(TestDataTypesTableDates):
-#     """Test date code generated against a bigquery backend"""
+class TestDataTypesTableDatesInBigquery(BuilderTestCase):
+    """Test generating "bigquery" flavored expressions."""
 
-#     def setUp(self):
-#         SQLAlchemyBuilder.clear_builder_cache()
-#         self.builder = SQLAlchemyBuilder.get_builder(self.datatypes_table)
-#         self.builder.drivername = "bigquery"
-#         self.builder.transformer.drivername = "bigquery"
+    def setUp(self):
+        super().setUp()
+        self.builder.drivername = "bigquery"
+        self.builder.transformer.drivername = "bigquery"
 
-#     def tearDown(self) -> None:
-#         SQLAlchemyBuilder.clear_builder_cache()
-#         return super().tearDown()
+    def test_dates_without_freetime(self):
+        """bigquery generates different sql for date conversions"""
+        good_examples = """
+        month([test_date]) > date("2020-12-30")          -> date_trunc(datatypes.test_date, month) > '2020-12-30'
+        month([test_datetime]) > date("2020-12-30")      -> datetime(timestamp_trunc(datatypes.test_datetime, month)) > '2020-12-30'
+        date("2020-12-30") < month([test_datetime])      -> datetime(timestamp_trunc(datatypes.test_datetime, month)) > '2020-12-30'
+        day([test_date]) > date("2020-12-30")            -> date_trunc(datatypes.test_date, day) > '2020-12-30'
+        week([test_date]) > date("2020-12-30")           -> date_trunc(datatypes.test_date, week(monday)) > '2020-12-30'
+        quarter([test_date]) > date("2020-12-30")        -> date_trunc(datatypes.test_date, quarter) > '2020-12-30'
+        year([test_date]) > date("2020-12-30")           -> date_trunc(datatypes.test_date, year) > '2020-12-30'
+        date([test_datetime])                            -> datetime(timestamp_trunc(datatypes.test_datetime, day))
+        """
+        self.check_good_examples(good_examples)
 
-#     def test_dates_without_freetime(self):
-#         """bigquery generates different sql for date conversions"""
-#         good_examples = f"""
-#         month([test_date]) > date("2020-12-30")          -> date_trunc(datatypes.test_date, month) > '2020-12-30'
-#         month([test_datetime]) > date("2020-12-30")      -> datetime(timestamp_trunc(datatypes.test_datetime, month)) > '2020-12-30'
-#         date("2020-12-30") < month([test_datetime])      -> datetime(timestamp_trunc(datatypes.test_datetime, month)) > '2020-12-30'
-#         day([test_date]) > date("2020-12-30")            -> date_trunc(datatypes.test_date, day) > '2020-12-30'
-#         week([test_date]) > date("2020-12-30")           -> date_trunc(datatypes.test_date, week(monday)) > '2020-12-30'
-#         quarter([test_date]) > date("2020-12-30")        -> date_trunc(datatypes.test_date, quarter) > '2020-12-30'
-#         year([test_date]) > date("2020-12-30")           -> date_trunc(datatypes.test_date, year) > '2020-12-30'
-#         date([test_datetime])                            -> datetime(timestamp_trunc(datatypes.test_datetime, day))
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             print("Parsing field", field, self.builder.drivername)
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+    # def test_percentiles(self):
+    #     good_examples = f"""
+    #     percentile1([score])                 -> sum(datatypes.score)
+    #     """
+    #     self.check_good_examples(good_examples)
 
 
-# class TestAggregations(GrammarTestCase):
-#     def test_allow_aggregation(self):
-#         # Can't tests with date conversions and freeze time :/
-#         good_examples = f"""
-#         sum([score])                 -> sum(datatypes.score)
-#         sum(score)                   -> sum(datatypes.score)
-#         sum(score*2.0)               -> sum(datatypes.score * 2.0)
-#         avg(score)                   -> avg(datatypes.score)
-#         min(test_date)               -> min(datatypes.test_date)
-#         max(test_datetime)           -> max(datatypes.test_datetime)
-#         max(score) - min(score)      -> max(datatypes.score) - min(datatypes.score)
-#         count_distinct([score])      -> count(DISTINCT datatypes.score)
-#         count_distinct([department]) -> count(DISTINCT datatypes.department)
-#         count_distinct(department)   -> count(DISTINCT datatypes.department)
-#         count_distinct(department = "MO" AND score > 20) -> count(DISTINCT (datatypes.department = 'MO' AND datatypes.score > 20))
-#         count_distinct(if(department = "MO" AND score > 20, department)) -> count(DISTINCT CASE WHEN (datatypes.department = 'MO' AND datatypes.score > 20) THEN datatypes.department END)
-#         count(IF(department = "MO" AND score > 20, department)) -> count(CASE WHEN (datatypes.department = 'MO' AND datatypes.score > 20) THEN datatypes.department END)
-#         count(*)                     -> count(*)
-#         """
+class TestAggregations(BuilderTestCase):
+    def test_allow_aggregation(self):
+        # Can't tests with date conversions and freeze time :/
+        good_examples = """
+        sum([score])                                         -> sum(datatypes.score)
+        sum([score])                                         -> sum(datatypes.score)
+        sum([score]*2.0)                                     -> sum(datatypes.score * 2.0)
+        avg([score])                                         -> avg(datatypes.score)
+        min([test_date])                                     -> min(datatypes.test_date)
+        max([test_datetime])                                 -> max(datatypes.test_datetime)
+        max([score]) - min([score])                          -> max(datatypes.score) - min(datatypes.score)
+        count_distinct([score])                              -> count(DISTINCT datatypes.score)
+        count_distinct([department])                         -> count(DISTINCT datatypes.department)
+        count_distinct([department])                         -> count(DISTINCT datatypes.department)
+        count_distinct([department] = "MO" AND [score] > 20) -> count(DISTINCT (datatypes.department = 'MO' AND datatypes.score > 20))
+        count_distinct(if([department] = "MO" AND [score] > 20, [department])) -> count(DISTINCT CASE WHEN (datatypes.department = 'MO' AND datatypes.score > 20) THEN datatypes.department END)
+        count(IF([department] = "MO" AND [score] > 20, [department])) -> count(CASE WHEN (datatypes.department = 'MO' AND datatypes.score > 20) THEN datatypes.department END)
+        count(*)                     -> count(*)
+        """
+        self.check_good_examples(good_examples)
 
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, forbid_aggregation=False, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+    def test_forbid_aggregation(self):
+        """These examples should all fail"""
+        bad_examples = """
+sum([score]) ->
+Aggregations are not allowed in this field.
 
-#     def test_forbid_aggregation(self):
-#         """These examples should all fail"""
+sum([score])
+^
+===
+sum([score]) ->
+Aggregations are not allowed in this field.
 
-#         bad_examples = """
-# sum([score]) ->
-# Aggregations are not allowed in this field.
+sum([score])
+^
+===
+sum([department]) ->
+A str can not be aggregated using sum.
 
-# sum([score])
-# ^
-# ===
-# sum(score) ->
-# Aggregations are not allowed in this field.
+sum([department])
+^
+===
+2.1235 + sum([department]) ->
+A str can not be aggregated using sum.
 
-# sum(score)
-# ^
-# ===
-# sum(department) ->
-# A str can not be aggregated using sum.
+2.1235 + sum([department])
+         ^
+===
+sum([score]) + sum([department]) ->
+Aggregations are not allowed in this field.
 
-# sum(department)
-# ^
-# ===
-# 2.1235 + sum(department) ->
-# A str can not be aggregated using sum.
+sum([score]) + sum([department])
+^
+A str can not be aggregated using sum.
 
-# 2.1235 + sum(department)
-#          ^
-# ===
-# sum(score) + sum(department) ->
-# Aggregations are not allowed in this field.
+sum([score]) + sum([department])
+               ^
+===
+sum([score]) + sum([department]) ->
+Aggregations are not allowed in this field.
 
-# sum(score) + sum(department)
-# ^
-# A str can not be aggregated using sum.
+sum([score]) + sum([department])
+^
+A str can not be aggregated using sum.
 
-# sum(score) + sum(department)
-#              ^
-# ===
-# sum(score) + sum(department) ->
-# Aggregations are not allowed in this field.
+sum([score]) + sum([department])
+               ^
+"""
+        self.check_bad_examples(bad_examples, forbid_aggregation=True)
 
-# sum(score) + sum(department)
-# ^
-# A str can not be aggregated using sum.
+    def test_bad_aggregations(self):
+        """These examples should all fail"""
 
-# sum(score) + sum(department)
-#              ^
-# """
+        bad_examples = """
+sum([department]) ->
+A str can not be aggregated using sum.
 
-#         for field, expected_error in self.bad_examples(bad_examples):
-#             with self.assertRaises(Exception) as e:
-#                 self.builder.parse(field, forbid_aggregation=True, debug=True)
-#             if str(e.exception).strip() != expected_error.strip():
-#                 print("===" * 10)
-#                 print(str(e.exception))
-#                 print("vs")
-#                 print(expected_error)
-#                 print("===" * 10)
-#             self.assertEqual(str(e.exception).strip(), expected_error.strip())
+sum([department])
+^
+===
+2.1235 + sum([department]) ->
+A str can not be aggregated using sum.
 
-#     def test_bad_aggregations(self):
-#         """These examples should all fail"""
+2.1235 + sum([department])
+         ^
+===
+sum([score]) + sum([department]) ->
+A str can not be aggregated using sum.
 
-#         bad_examples = """
-# sum(department) ->
-# A str can not be aggregated using sum.
+sum([score]) + sum([department])
+               ^
+===
+percentile1([score]) ->
+Percentile is not supported on sqlite
 
-# sum(department)
-# ^
-# ===
-# 2.1235 + sum(department) ->
-# A str can not be aggregated using sum.
+percentile1([score])
+^
+===
+percentile13([score]) ->
+Percentile values of 13 are not supported.
 
-# 2.1235 + sum(department)
-#          ^
-# ===
-# sum(score) + sum(department) ->
-# A str can not be aggregated using sum.
+percentile13([score])
+^
+Percentile is not supported on sqlite
 
-# sum(score) + sum(department)
-#              ^
-# ===
-# percentile1([score]) ->
-# Percentile is not supported on sqlite
+percentile13([score])
+^
+"""
+        self.check_bad_examples(bad_examples)
 
-# percentile1([score])
-# ^
-# ===
-# percentile13([score]) ->
-# Percentile values of 13 are not supported.
-
-# percentile13([score])
-# ^
-# Percentile is not supported on sqlite
-
-# percentile13([score])
-# ^
-# """
-
-#         for field, expected_error in self.bad_examples(bad_examples):
-#             with self.assertRaises(Exception) as e:
-#                 self.builder.parse(field, debug=True)
-#             if str(e.exception).strip() != expected_error.strip():
-#                 print("===" * 10)
-#                 print(str(e.exception))
-#                 print("vs")
-#                 print(expected_error)
-#                 print("===" * 10)
-#             self.assertEqual(str(e.exception).strip(), expected_error.strip())
-
-#     def test_percentiles(self):
-#         # TODO: build these tests
-#         # Can't test with sqlalchemy
-#         good_examples = f"""
-#         #percentile1([score])                 -> sum(datatypes.score)
-#         """
-
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+    # def test_percentiles(self):
+    #     # TODO: build these tests
+    #     # Can't test with sqlalchemy
+    #     good_examples = f"""
+    #     #percentile1([score])                 -> sum(datatypes.score)
+    #     """
+    #     self.check_good_examples(good_examples)
+    #     for field, expected_sql in self.examples(good_examples):
+    #         expr, _ = self.builder.parse(field, debug=True)
+    #         self.assertEqual(expr_to_str(expr), expected_sql)
 
 
-# class TestIf(GrammarTestCase):
-#     def test_if(self):
-#         good_examples = f"""
-#         # Number if statements
-#         if([valid_score], [score], -1)                                  -> CASE WHEN datatypes.valid_score THEN datatypes.score ELSE -1 END
-#         if([score] > 2, [score], -1)                                    -> CASE WHEN (datatypes.score > 2) THEN datatypes.score ELSE -1 END
-#         if([score] > 2, [score])                                        -> CASE WHEN (datatypes.score > 2) THEN datatypes.score END
-#         if([score] > 2, [score]) + if([score] > 4, 1)                   -> CASE WHEN (datatypes.score > 2) THEN datatypes.score END + CASE WHEN (datatypes.score > 4) THEN 1 END
-#         if([score] > 2, [score] + if([score] > 4, 1))                   -> CASE WHEN (datatypes.score > 2) THEN datatypes.score + CASE WHEN (datatypes.score > 4) THEN 1 END END
-#         if([score] > 2, [score], [score] > 4, [score]*2.0, -5)          -> CASE WHEN (datatypes.score > 2) THEN datatypes.score WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 ELSE -5 END
-#         if([score] > 2, null, [score] > 4, [score]*2.0, -5)             -> CASE WHEN (datatypes.score > 2) THEN NULL WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 ELSE -5 END
-#         if([score] > 2, null, [score] > 4, [score]*2.0, NULL)           -> CASE WHEN (datatypes.score > 2) THEN NULL WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 END
-#         if([score] > 2, [SCORE]/2.24, [score] > 4, [score]*2.0, [score] > 6.0, [score]*3.5, NULL)           -> CASE WHEN (datatypes.score > 2) THEN CAST(datatypes.score AS FLOAT) / 2.24 WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 WHEN (datatypes.score > 6.0) THEN datatypes.score * 3.5 END
-#         if([score] > 2 OR score = 1, [score]*3.5)                       -> CASE WHEN (datatypes.score > 2 OR datatypes.score = 1) THEN datatypes.score * 3.5 END
-#         # String if statements
-#         if(department = "Radiology", "XDR-Radiology")                   -> CASE WHEN (datatypes.department = 'Radiology') THEN 'XDR-Radiology' END
-#         if([score] > 2, "XDR-Radiology")                                -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' END
-#         if([score] > 2, "XDR-Radiology", "OTHERS")                      -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' ELSE 'OTHERS' END
-#         if([score] > 2, "XDR-Radiology", "OTHERS"+department)           -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' ELSE 'OTHERS' || datatypes.department END
-#         if([score] > 2, "XDR-Radiology", "OTHERS") + department         -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' ELSE 'OTHERS' END || datatypes.department
-#         # This is actually an error, but we allow it for now
-#         if([score] > 2, NULL, "OTHERS") + department                    -> CASE WHEN (datatypes.score > 2) THEN NULL ELSE 'OTHERS' END || datatypes.department
-#         if([score] > 2, department, score > 4, username, "OTHERS")      -> CASE WHEN (datatypes.score > 2) THEN datatypes.department WHEN (datatypes.score > 4) THEN datatypes.username ELSE 'OTHERS' END
-#         # Date if statements
-#         if([score] > 2, test_date)                                      -> CASE WHEN (datatypes.score > 2) THEN datatypes.test_date END
-#         month(if([score] > 2, test_date))                               -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_date END)
-#         if(test_date > date("2020-01-01"), test_date)                   -> CASE WHEN (datatypes.test_date > '2020-01-01') THEN datatypes.test_date END
-#         # Datetime if statements
-#         if([score] > 2, test_datetime)                                  -> CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END
-#         month(if([score] > 2, test_datetime))                           -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
-#         if(test_datetime > date("2020-01-01"), test_datetime)           -> CASE WHEN (datatypes.test_datetime > '2020-01-01 00:00:00') THEN datatypes.test_datetime END
-#         month(if([score] > 2, test_datetime))                           -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
-#         if(score<2,"babies",score<13,"children",score<20,"teens","oldsters")       -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
-#         if((score)<2,"babies",(score)<13,"children",(score)<20,"teens","oldsters") -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
-#         if(department = "1", score, department="2", score*2)            -> CASE WHEN (datatypes.department = '1') THEN datatypes.score WHEN (datatypes.department = '2') THEN datatypes.score * 2 END
-#         """
+class TestIf(BuilderTestCase):
+    def test_if(self):
+        good_examples = f"""
+        # Number if statements
+        if([valid_score], [score], -1)                                                             -> CASE WHEN datatypes.valid_score THEN datatypes.score ELSE -1 END
+        if([score] > 2, [score], -1)                                                               -> CASE WHEN (datatypes.score > 2) THEN datatypes.score ELSE -1 END
+        if([score] > 2, [score])                                                                   -> CASE WHEN (datatypes.score > 2) THEN datatypes.score END
+        if([score] > 2, [score]) + if([score] > 4, 1)                                              -> CASE WHEN (datatypes.score > 2) THEN datatypes.score END + CASE WHEN (datatypes.score > 4) THEN 1 END
+        if([score] > 2, [score] + if([score] > 4, 1))                                              -> CASE WHEN (datatypes.score > 2) THEN datatypes.score + CASE WHEN (datatypes.score > 4) THEN 1 END END
+        if([score] > 2, [score], [score] > 4, [score]*2.0, -5)                                     -> CASE WHEN (datatypes.score > 2) THEN datatypes.score WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 ELSE -5 END
+        if([score] > 2, null, [score] > 4, [score]*2.0, -5)                                        -> CASE WHEN (datatypes.score > 2) THEN NULL WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 ELSE -5 END
+        if([score] > 2, null, [score] > 4, [score]*2.0, NULL)                                      -> CASE WHEN (datatypes.score > 2) THEN NULL WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 END
+        if([score] > 2, [SCORE]/2.24, [score] > 4, [score]*2.0, [score] > 6.0, [score]*3.5, NULL)  -> CASE WHEN (datatypes.score > 2) THEN CAST(datatypes.score AS FLOAT) / 2.24 WHEN (datatypes.score > 4) THEN datatypes.score * 2.0 WHEN (datatypes.score > 6.0) THEN datatypes.score * 3.5 END
+        if([score] > 2 OR [score] = 1, [score]*3.5)                                                -> CASE WHEN (datatypes.score > 2 OR datatypes.score = 1) THEN datatypes.score * 3.5 END
+        # String if statements
+        if([department] = "Radiology", "XDR-Radiology")                                            -> CASE WHEN (datatypes.department = 'Radiology') THEN 'XDR-Radiology' END
+        if([score] > 2, "XDR-Radiology")                                                           -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' END
+        if([score] > 2, "XDR-Radiology", "OTHERS")                                                 -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' ELSE 'OTHERS' END
+        if([score] > 2, "XDR-Radiology", "OTHERS"+[department])                                    -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' ELSE 'OTHERS' || datatypes.department END
+        if([score] > 2, "XDR-Radiology", "OTHERS") + [department]                                  -> CASE WHEN (datatypes.score > 2) THEN 'XDR-Radiology' ELSE 'OTHERS' END || datatypes.department
+        # This is actually an error, but we allow it for now
+        if([score] > 2, NULL, "OTHERS") + [department]                                             -> CASE WHEN (datatypes.score > 2) THEN NULL ELSE 'OTHERS' END || datatypes.department
+        if([score] > 2, [department], [score] > 4, [username], "OTHERS")                           -> CASE WHEN (datatypes.score > 2) THEN datatypes.department WHEN (datatypes.score > 4) THEN datatypes.username ELSE 'OTHERS' END
+        # Date if statements
+        if([score] > 2, [test_date])                                                               -> CASE WHEN (datatypes.score > 2) THEN datatypes.test_date END
+        month(if([score] > 2, [test_date]))                                                        -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_date END)
+        if([test_date] > date("2020-01-01"), [test_date])                                          -> CASE WHEN (datatypes.test_date > '2020-01-01') THEN datatypes.test_date END
+        # Datetime if statements
+        if([score] > 2, [test_datetime])                                                           -> CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END
+        month(if([score] > 2, [test_datetime]))                                                    -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
+        if([test_datetime] > date("2020-01-01"), [test_datetime])                                  -> CASE WHEN (datatypes.test_datetime > '2020-01-01 00:00:00') THEN datatypes.test_datetime END
+        month(if([score] > 2, [test_datetime]))                                                    -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
+        if([score]<2,"babies",[score]<13,"children",[score]<20,"teens","oldsters")                 -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
+        if(([score])<2,"babies",([score])<13,"children",([score])<20,"teens","oldsters")           -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
+        if([department] = "1", [score], [department]="2", [score]*2)                               -> CASE WHEN (datatypes.department = '1') THEN datatypes.score WHEN (datatypes.department = '2') THEN datatypes.score * 2 END
+        """
+        self.check_good_examples(good_examples)
 
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, debug=True)
-#             self.assertEqual(expr_to_str(expr), expected_sql)
+    def test_failing_if(self):
+        """These examples should all fail"""
 
-#     def test_failing_if(self):
-#         """These examples should all fail"""
+        bad_examples = """
+if([department], [score]) ->
+This should be a boolean column or expression
 
-#         bad_examples = """
-# if(department, score) ->
-# This should be a boolean column or expression
+if([department], [score])
+    ^
+===
+if([department] = 2, [score]) ->
+Can't compare str to num
 
-# if(department, score)
-#    ^
-# ===
-# if(department = 2, score) ->
-# Can't compare str to num
+if([department] = 2, [score])
+    ^
+===
+if([department] = "1", [score], [department], [score]*2) ->
+This should be a boolean column or expression
 
-# if(department = 2, score)
-#    ^
-# ===
-# if(department = "1", score, department, score*2) ->
-# This should be a boolean column or expression
+if([department] = "1", [score], [department], [score]*2)
+                                 ^
+===
+if([department] = "1", [score], [valid_score], [score]*2, [department], 12.5) ->
+This should be a boolean column or expression
 
-# if(department = "1", score, department, score*2)
-#                             ^
-# ===
-# if(department = "1", score, valid_score, score*2, department, 12.5) ->
-# This should be a boolean column or expression
+if([department] = "1", [score], [valid_score], [score]*2, [department], 12.5)
+                                                           ^
+===
+if([department], [score], [valid_score], [score]*2) ->
+This should be a boolean column or expression
 
-# if(department = "1", score, valid_score, score*2, department, 12.5)
-#                                                   ^
-# ===
-# if(department, score, valid_score, score*2) ->
-# This should be a boolean column or expression
+if([department], [score], [valid_score], [score]*2)
+    ^
+===
+if([department] = "foo", [score], [valid_score], [department]) ->
+The values in this if statement must be the same type, not num and str
 
-# if(department, score, valid_score, score*2)
-#    ^
-# ===
-# if(department = "foo", score, valid_score, department) ->
-# The values in this if statement must be the same type, not num and str
+if([department] = "foo", [score], [valid_score], [department])
+                                                  ^
+===
+if([department] = "foo", [department], [valid_score], [score]) ->
+The values in this if statement must be the same type, not str and num
 
-# if(department = "foo", score, valid_score, department)
-#                                            ^
-# ===
-# if(department = "foo", department, valid_score, score) ->
-# The values in this if statement must be the same type, not str and num
-
-# if(department = "foo", department, valid_score, score)
-#                                                 ^
-# """
-
-#         for field, expected_error in self.bad_examples(bad_examples):
-#             with self.assertRaises(Exception) as e:
-#                 self.builder.parse(field, forbid_aggregation=True, debug=True)
-#             if str(e.exception).strip() != expected_error.strip():
-#                 print("===actual===")
-#                 print(str(e.exception))
-#                 print("===expected===")
-#                 print(expected_error)
-#                 print("===" * 10)
-#             self.assertEqual(str(e.exception).strip(), expected_error.strip())
+if([department] = "foo", [department], [valid_score], [score])
+                                                       ^
+"""
+        self.check_bad_examples(bad_examples)
 
 
-# class TestSQLAlchemySerialize(GrammarTestCase):
-#     """Test we can serialize and deserialize parsed results using
-#     sqlalchemy.ext.serialize. This is important because parsing is
-#     costly."""
+class TestSQLAlchemySerialize(BuilderTestCase):
+    """Test we can serialize and deserialize parsed results using
+    sqlalchemy.ext.serialize. This is important because parsing is
+    costly."""
 
-#     def test_ser_deser(self):
-#         # Can't tests with date conversions and freeze time :/
-#         good_examples = f"""
-#         sum([score])                 -> sum(datatypes.score)
-#         sum(score)                   -> sum(datatypes.score)
-#         month(if([score] > 2, test_datetime))                           -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
-#         if(test_datetime > date("2020-01-01"), test_datetime)           -> CASE WHEN (datatypes.test_datetime > '2020-01-01 00:00:00') THEN datatypes.test_datetime END
-#         month(if([score] > 2, test_datetime))                           -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
-#         if(score<2,"babies",score<13,"children",score<20,"teens","oldsters")       -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
-#         if((score)<2,"babies",(score)<13,"children",(score)<20,"teens","oldsters") -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
-#         """
+    def test_ser_deser(self):
+        # Can't tests with date conversions and freeze time :/
+        good_examples = """
+        sum([score])                 -> sum(datatypes.score)
+        sum([score])                 -> sum(datatypes.score)
+        month(if([score] > 2, [test_datetime]))                                          -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
+        if([test_datetime] > date("2020-01-01"), [test_datetime])                        -> CASE WHEN (datatypes.test_datetime > '2020-01-01 00:00:00') THEN datatypes.test_datetime END
+        month(if([score] > 2, [test_datetime]))                                          -> date_trunc('month', CASE WHEN (datatypes.score > 2) THEN datatypes.test_datetime END)
+        if([score]<2,"babies",[score]<13,"children",[score]<20,"teens","oldsters")       -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
+        if(([score])<2,"babies",([score])<13,"children",([score])<20,"teens","oldsters") -> CASE WHEN (datatypes.score < 2) THEN 'babies' WHEN (datatypes.score < 13) THEN 'children' WHEN (datatypes.score < 20) THEN 'teens' ELSE 'oldsters' END
+        """
+        from sqlalchemy.ext.serializer import dumps, loads
 
-#         for field, expected_sql in self.examples(good_examples):
-#             expr, _ = self.builder.parse(field, forbid_aggregation=False, debug=True)
-#             ser = dumps(expr)
-#             expr = loads(ser, self.builder.selectable.metadata, self.oven.Session())
-#             self.assertEqual(expr_to_str(expr), expected_sql)
-
-
-# class TestIsValidColumn(GrammarTestCase):
-#     def test_is_valid_column(self):
-#         good_values = [
-#             "this",
-#             "that",
-#             "THIS",
-#             "THAT",
-#             "this_that_and_other",
-#             "_other",
-#             "THIS_that_",
-#         ]
-#         for v in good_values:
-#             self.assertTrue(is_valid_column(v))
-
-#         bad_values = [
-#             " this",
-#             "that ",
-#             " THIS",
-#             "TH AT  ",
-#             "for_slackbot}_organization_name",
-#         ]
-#         for v in bad_values:
-#             self.assertFalse(is_valid_column(v))
+        for field, expected_sql in self.examples(good_examples):
+            resp = self.builder.parse(field, forbid_aggregation=False, debug=True)
+            ser = dumps(resp.expression)
+            expr = loads(
+                ser, self.builder.dbinfo.metadata, engine=self.builder.dbinfo.engine
+            )
+            self.assertEqual(expr_to_str(expr), expected_sql)

@@ -1,11 +1,29 @@
-from lark import Tree, Visitor
+from dataclasses import dataclass
+from lark import Tree, Visitor, GrammarError
 from lark.lexer import Token
+
+
+@dataclass
+class VisitError:
+    # A description of the error
+    message: str
+    # A descriptive picture of where in the parsed text the error occurs
+    description: str
+    # The location of the error
+    pos: int
+
+    def __repr__(self) -> str:
+        return f"{self.message}\n\n{self.description}"
 
 
 class SQLALchemyValidator(Visitor):
     def __init__(self, text, forbid_aggregation, drivername):
-        """Visit the tree and return descriptive information. Populate
+        """Visit the tree and return descriptive information and
         a list of errors.
+
+        The grammar is permissive so that rather than returning parse errors, we
+        can point to the location an error occurs.
+
 
         Args:
             text (str): A copy of the parsed text for error descriptions
@@ -50,9 +68,18 @@ class SQLALchemyValidator(Visitor):
                 break
 
         if tok:
-            extra_context = self._get_context_for_token(tok, span=200)
-            message = f"{message}\n\n{extra_context}"
-        self.errors.append(message)
+            span = 80
+            pos = tok.start_pos
+            start = max(pos - span, 0)
+            end = pos + span
+            before = self.text[start:pos].rsplit("\n", 1)[-1]
+            after = self.text[pos:end].split("\n", 1)[0]
+            # Make a pointer to the position where the issue occurred
+            description = before + after + "\n" + " " * len(before) + "^\n"
+
+            self.errors.append(
+                VisitError(message=message, description=description, pos=pos)
+            )
 
     def _get_context_for_token(self, tok, span=40):
         pos = tok.start_pos
@@ -60,6 +87,7 @@ class SQLALchemyValidator(Visitor):
         end = pos + span
         before = self.text[start:pos].rsplit("\n", 1)[-1]
         after = self.text[pos:end].split("\n", 1)[0]
+        # Make a pointer to the position where the issue occurred
         return before + after + "\n" + " " * len(before) + "^\n"
 
     def _error_math(self, tree, verb):

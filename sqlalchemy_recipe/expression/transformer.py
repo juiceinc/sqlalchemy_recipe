@@ -555,8 +555,9 @@ class TransformToSQLAlchemyExpression(Transformer):
 
         # collect the other args into pairs
         # ['a','b','c','d'] --> [('a',b'), ('c','d')]
-        pairs = zip(args[::2], args[1::2])
-        return case(pairs, else_=else_expr)
+        pairs = list(zip(args[::2], args[1::2]))
+        stmt = case(pairs, else_=else_expr)
+        return stmt
 
     # Constants
 

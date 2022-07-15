@@ -1,9 +1,11 @@
 """Test the lark grammar used to define field expressions."""
 
+from ast import Expr
 import time
 
 # from freezegun import freeze_time
 from sqlalchemy_recipe.expression.grammar import (
+    is_valid_column,
     make_columns_for_table,
     make_datatype_rule,
     make_grammar,
@@ -130,3 +132,28 @@ class GrammarTestCase(ExpressionTestCase):
             actual = make_datatype_rule("string.1", columns, "str", ["foo"])
             self.assertEqual(actual, expected)
         self.assertEqual(len(self.tables), len(expected_rules))
+
+
+class TestIsValidColumn(ExpressionTestCase):
+    def test_is_valid_column(self):
+        good_values = [
+            "this",
+            "that",
+            "THIS",
+            "THAT",
+            "this_that_and_other",
+            "_other",
+            "THIS_that_",
+        ]
+        for v in good_values:
+            self.assertTrue(is_valid_column(v))
+
+        bad_values = [
+            " this",
+            "that ",
+            " THIS",
+            "TH AT  ",
+            "for_slackbot}_organization_name",
+        ]
+        for v in bad_values:
+            self.assertFalse(is_valid_column(v))
