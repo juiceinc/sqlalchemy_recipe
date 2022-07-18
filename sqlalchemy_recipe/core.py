@@ -38,6 +38,20 @@ class Recipe:
         .order_by("count(distinct_cow))")
         .filters(dict of filter syntax or boolean expressions)
 
+    shelf = {
+        cntcow: count(distinct(cow)
+        cntcowpct: @cntcow / {{@cntcow}}
+        cow: cow
+        mouse: mouse
+    }
+
+    recipe(table="foo", dbinfo=dbinfo)
+        .ingredients("cow", "mouse", "cntcowpct")
+        .order_by(cntcowpct)
+        .filters({
+            cow:["holstein", "brown betty"]
+        })
+
     select cow,
            mouse,
            count(distinct(cow)) / 9520
@@ -73,13 +87,9 @@ class Recipe:
     def order_by(self, *args) -> Self:
         self._order_by = args
 
-    def total_count(self) -> int:
-        """Return the total count of items with no pagination applied"""
-        pass
-
     @builder
     def order_by(self, *args) -> Self:
-        self._order_bys = order_bys
+        self._order_bys = args
 
     def select_from(self, selectable) -> Self:
         self._select_from = selectable
@@ -190,6 +200,10 @@ class Recipe:
 
         self._query = recipe_parts["query"]
         return self._query
+
+    def total_count(self) -> int:
+        """Return the total count of items with no pagination applied"""
+        pass
 
     def to_sql(self) -> str:
         """A string representation of the SQL this recipe will generate."""

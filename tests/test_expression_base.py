@@ -36,7 +36,6 @@ configs = [
         "cache.dogpile.expiration_time": 2,
     },
     {"sqlalchemy.url": f"sqlite:///{test_db}"},
-    {"sqlalchemy.url": f"sqlite:///{test_db}"},
 ]
 
 

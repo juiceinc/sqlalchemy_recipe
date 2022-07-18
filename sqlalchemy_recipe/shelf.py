@@ -1,96 +1,12 @@
 from copy import copy
-from dataclasses import dataclass
-from functools import total_ordering
-import this
-from typing import List, Union
-from typing_extensions import Self
-from uuid import uuid4
-from numpy import isin
-from sqlalchemy import Float, String, and_, between, case, cast, func, or_, text, not_
-from recipe.exceptions import BadIngredient
-from recipe.utils import AttrDict, filter_to_string
-from recipe.utils.datatype import datatype_from_column_expression
 
-"""
-we take a dictionary like this
-
-patients:
-   count(patients)
-dept_full:
-   department + "/" + institution
-
-
-this becomes
-
-{
-    id: patients,
-    expression: count(patients)
-    datatype: int
-    kind: measure
-}
-{
-    id: dept_full
-    expression: department + "/" + institution
-    datatype: str
-    kind: dimension
-}
-
-
-r = (
-    recipe("patients", "dept_full")
-    .order_by("-dept_full")
-    .filters("[patients]>5")
-    .limit(5)
-    .execute_with(engine, table)
-
-select
-    dept + "/" + institution as dept_full,
-    count(patients) as patients,
-from mytable
-group by dept_full desc
-having count(patients) > 5
-
-"""
-
-from sqlalchemy_recipe.expression.builder import BuilderResponse
-
-# each ingredient is a single expression that may have an id and role
-# id+role acts as the label for the ingredient
-# br = BuilderResponse(id="foo", role=None)
-# br2 = BuilderResponse(id="foo", role="id")
-# br3 = BuilderResponse(id="foo", role="order_by")
-
-# an ingredient is a collection of builder responses that get added
-# an ingredient may also generate subqueries
-
-# three uses for subqueries
-# 1) value / total of value
-#    sum(sales) / {{ sum(sales) }}
-# 2) value / unfiltered total of value
-# 3) other_table(student_id).student_age
+from collections import OrderedDict
 
 
 _POP_DEFAULT = object()
 
 
-@total_ordering
-@dataclass
-class BuilderIngredient(object):
-    builder_response: BuilderResponse
-    id: str
-    role: str
-    sort_ascending: bool = True
-    order_by: bool = False
-    anonymizer: Union[str, callable] = None
-
-    def __eq__(self, other: Self) -> bool:
-        return (self.id, self.role) == (other.id, other.role)
-
-    def __lt__(self, other: Self) -> bool:
-        return (self.id, self.role) < (other.id, other.role)
-
-
-class BuilderIngredientDict:
+class Shelf:
     """Holds ingredients used by a recipe."""
 
     def __init__(self, *args, **kwargs):
@@ -99,16 +15,17 @@ class BuilderIngredientDict:
 
     # Dict Interface
 
-    def get(self, key, default=_POP_DEFAULT):
-        """key is either a (id, role) tuple or an id"""
-        key = self._clean_key(key)
-        return self._ingredients.get(key, default)
+    def get(self, k, d=None):
+        ingredient = self._ingredients.get(k, d)
+        if isinstance(ingredient, Ingredient):
+            ingredient.id = k
+        return ingredient
 
     def items(self):
         """Return an iterator over the ingredient names and values."""
         return self._ingredients.items()
 
-    def values(self) -> List[BuilderIngredient]:
+    def values(self):
         """Return an iterator over the ingredients."""
         return self._ingredients.values()
 
@@ -117,32 +34,35 @@ class BuilderIngredientDict:
         return self._ingredients.keys()
 
     def __copy__(self):
+        meta = copy(self.Meta)
         ingredients = copy(self._ingredients)
-        return type(self)(ingredients)
+        new_shelf = type(self)(ingredients)
+        new_shelf.Meta = meta
+        return new_shelf
 
     def __iter__(self):
         return iter(self._ingredients)
 
     def __getitem__(self, key):
-        return self.get(self._clean_key(key))
+        """Set the id and anonymize property of the ingredient whenever we
+        get or set items"""
+        return self._ingredients[key]
 
-    def __setitem__(self, key, ingredient: BuilderIngredient):
+    def __setitem__(self, key, ingredient):
         """Set the id and anonymize property of the ingredient whenever we
         get or set items"""
         # Maintainer's note: try to make all mutation of self._ingredients go
         # through this method, so we can reliably copy & annotate the
         # ingredients that go into the Shelf.
-        if not isinstance(ingredient, BuilderIngredient):
+        if not isinstance(ingredient, Ingredient):
             raise TypeError(
-                "Can only set BuilderIngredient as items on BuilderIngredientDict. "
+                "Can only set Ingredients as items on Shelf. "
                 "Got: {!r}".format(ingredient)
             )
         ingredient_copy = copy(ingredient)
-        ingrkey = (ingredient.id, ingredient.role)
-        self._ingredients[ingrkey] = ingredient_copy
+        self._ingredients[key] = ingredient_copy
 
     def __contains__(self, key):
-        key = self._clean_key(key)
         return key in self._ingredients
 
     def __len__(self):
@@ -156,101 +76,113 @@ class BuilderIngredientDict:
         if d is not None:
             items = list(d.items())
         for k, v in items + list(kwargs.items()):
-            k = self._clean_key(k)
             self[k] = v
 
-    def pop(self, key, default=_POP_DEFAULT):
+    def pop(self, k, d=_POP_DEFAULT):
         """Pop an ingredient off of this shelf."""
-        key = self._clean_key(key)
-        if default is _POP_DEFAULT:
-            return self._ingredients.pop(key)
+        if d is _POP_DEFAULT:
+            return self._ingredients.pop(k)
         else:
-            return self._ingredients.pop(key, default)
+            return self._ingredients.pop(k, d)
 
     # End dict interface
-
-    def _clean_key(self, key):
-        assert isinstance(key, (str, tuple))
-        if not isinstance(key, tuple):
-            return (key, None)
-        assert len(key) == 2
-        return key
 
     def ingredients(self):
         """Return the ingredients in this shelf in a deterministic order"""
         return sorted(list(self.values()))
 
-    def order_by(self, *args: List[str]):
-        """Mark these ingredients as order bys"""
-        ascending = True
-        for key in args:
-            if key.startswith("-"):
-                ascending = False
-                key = key[1:]
-            ingr = self.find((key, "order_by"), (key, None))
-            ingr.sort_ascending = ascending
-            ingr.order_by = True
+    @property
+    def dimension_ids(self):
+        """Return the Dimensions on this shelf in the order in which
+        they were used."""
+        return self._sorted_ingredients(
+            [d.id for d in self.values() if isinstance(d, Dimension)]
+        )
 
-    # @property
-    # def dimension_ids(self):
-    #     """Return the Dimensions on this shelf in the order in which
-    #     they were used."""
-    #     return self._sorted_ingredients(
-    #         [d.id for d in self.values() if isinstance(d, Dimension)]
-    #     )
+    @property
+    def metric_ids(self):
+        """Return the Metrics on this shelf in the order in which
+        they were used."""
+        return self._sorted_ingredients(
+            [d.id for d in self.values() if isinstance(d, Metric)]
+        )
 
-    # @property
-    # def metric_ids(self):
-    #     """Return the Metrics on this shelf in the order in which
-    #     they were used."""
-    #     return self._sorted_ingredients(
-    #         [d.id for d in self.values() if isinstance(d, Metric)]
-    #     )
+    @property
+    def filter_ids(self):
+        """Return the Filters on this shelf in the order in which
+        they were used."""
+        return self._sorted_ingredients(
+            [d.id for d in self.values() if isinstance(d, Filter)]
+        )
 
-    # @property
-    # def filter_ids(self):
-    #     """Return the Filters on this shelf in the order in which
-    #     they were used."""
-    #     return self._sorted_ingredients(
-    #         [d.id for d in self.values() if isinstance(d, Filter)]
-    #     )
+    def _sorted_ingredients(self, ingredients):
+        def sort_key(id):
+            if id in self.Meta.ingredient_order:
+                return self.Meta.ingredient_order.index(id)
+            else:
+                return 9999
+
+        return tuple(sorted(ingredients, key=sort_key))
 
     def __repr__(self):
         """A string representation of the ingredients used in a recipe
         ordered by Dimensions, Metrics, Filters, then Havings
         """
-        lines = [ingredient.describe() for ingredient in sorted(self.values())]
+        lines = []
+        # sort the ingredients by type
+        for ingredient in sorted(self.values()):
+            lines.append(ingredient.describe())
         return "\n".join(lines)
 
-    def find(self, *keys: List[tuple]):
-        """
-        Find an ingredient by searching through keys in order
-        """
-        for key in keys:
-            if key in self:
-                return self[key]
-        raise Exception(f"Can't find ingredient in shelf {keys}")
+    def use(self, ingredient):
+        if not isinstance(ingredient, Ingredient):
+            raise TypeError(
+                "Can only set Ingredients as items on Shelf. "
+                "Got: {!r}".format(ingredient)
+            )
 
-    def make_statement(self, group_by_labels=True, order_by_labels=True):
-        """Build a query using the ingredients in this shelf"""
-        columns = []
-        group_bys = []
-        order_bys = []
+        # Track the order in which ingredients are added.
+        self.Meta.ingredient_order.append(ingredient.id)
+        self[ingredient.id] = ingredient
 
-        for ingr in self.values():
-            if ingr.builder_response.is_aggr:
-                continue
-            lbl = f"{ingr.id}__{ingr.role}" if ingr.role is not None else ingr.id
-            columns.append(ingr.builder_response.expression.label(lbl))
-            if group_by_labels:
-                group_bys.append(lbl)
-            else:
-                group_bys.append(ingr.builder_response.expression)
-            if ingr.order_by:
-                if order_by_labels:
-                    order_bys.append(lbl)
-                else:
-                    order_bys.append(ingr.builder_response.expression)
+    def find(self, id: str, role=None):
+        """
+        Find an Ingredient, optionally using the shelf.
+
+        :param obj: A string or Ingredient
+        :param filter_to_class: The Ingredient subclass that obj must be an
+         instance of
+        :param constructor: An optional callable for building Ingredients
+         from obj
+        :return: An Ingredient of subclass `filter_to_class`
+        """
+        if callable(constructor):
+            obj = constructor(obj, shelf=self)
+
+        if isinstance(obj, str):
+            set_descending = obj.startswith("-")
+            if set_descending:
+                obj = obj[1:]
+
+            if obj not in self:
+                raise BadRecipe("{} doesn't exist on the shelf".format(obj))
+
+            ingredient = self[obj]
+            if isinstance(ingredient, InvalidIngredient):
+                # allow InvalidIngredient, it will be handled at a later time
+                return ingredient
+
+            if not isinstance(ingredient, filter_to_class):
+                raise BadRecipe("{} is not a {}".format(obj, filter_to_class))
+
+            if set_descending:
+                ingredient.ordering = "desc"
+
+            return ingredient
+        elif isinstance(obj, filter_to_class):
+            return obj
+        else:
+            raise BadRecipe("{} is not a {}".format(obj, filter_to_class))
 
     def brew_query_parts(self, order_by_keys=[]):
         """Make columns, group_bys, filters, havings"""

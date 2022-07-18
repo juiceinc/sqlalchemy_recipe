@@ -14,8 +14,6 @@ except ImportError:
 if sys.argv[-1] == "publish":
     os.system("python setup.py sdist upload")
     sys.exit()
-    
-    
 
 if sys.argv[-1] == "test":
     try:
@@ -57,6 +55,7 @@ setup(
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
     ],
     tests_require=["pytest", "pytest-cov"],
     install_requires=install,

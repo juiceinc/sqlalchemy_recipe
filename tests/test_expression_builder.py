@@ -8,6 +8,7 @@ from sqlalchemy_recipe.dbinfo import get_dbinfo
 
 from sqlalchemy_recipe.expression.builder import SQLAlchemyBuilder
 from sqlalchemy_recipe.expression.grammar import is_valid_column
+from sqlalchemy_recipe.expression.validator import VisitError
 
 from .test_expression_base import ExpressionTestCase
 from .utils import expr_to_str
@@ -81,13 +82,13 @@ class BuilderTestCase(ExpressionTestCase):
         for field, expected_error in self.bad_examples(bad_examples):
             with self.assertRaises(Exception) as e:
                 builder.parse(field, debug=True, **parse_kwargs)
-            if str(e.exception).strip() != expected_error.strip():
-                print("===" * 10)
-                print(e.exception)
-                print("vs")
-                print(expected_error)
-                print("===" * 10)
-            self.assertEqual(str(e.exception).strip(), expected_error.strip())
+                if str(e.exception).strip() != expected_error.strip():
+                    print("===" * 10)
+                    print(e.exception)
+                    print("vs")
+                    print(expected_error)
+                    print("===" * 10)
+                self.assertEqual(str(e.exception).strip(), expected_error.strip())
 
     def check_good_examples(self, good_examples, builder=None, **parse_kwargs):
         if builder is None:
@@ -747,6 +748,15 @@ if([department] = "foo", [department], [valid_score], [score])
                                                        ^
 """
         self.check_bad_examples(bad_examples)
+
+    def test_validator_errors(self):
+        """These examples should all fail"""
+        expr = "if([department], [score])"
+        with self.assertRaises(Exception) as e:
+            self.builder.parse(expr, debug=True)
+            self.assertEqual(len(e.validator_errors), 1)
+            self.assertIsInstance(e.validator_errors[0], VisitError)
+            self.assertEqual(e.validator_errors[0].pos, 20)
 
 
 class TestSQLAlchemySerialize(BuilderTestCase):

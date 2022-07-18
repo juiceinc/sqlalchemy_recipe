@@ -1,25 +1,25 @@
 """Validate and parse expressions into SQLAlchemy expressions"""
 
-from dataclasses import dataclass
 import functools
-from sqlalchemy import Table, func
+from dataclasses import dataclass
+from datetime import date, datetime
+
+from lark import GrammarError
+from sqlalchemy import func
 from sqlalchemy.sql.expression import ClauseElement
+
 from sqlalchemy_recipe.dbinfo import DBInfo, ReflectedTable
-from lark import GrammarError, Lark
-from datetime import datetime, date
 from sqlalchemy_recipe.expression.datatype import DataType
-
 from sqlalchemy_recipe.expression.grammar import make_columns_for_table
-from .transformer import TransformToSQLAlchemyExpression
-from .validator import SQLALchemyValidator
-
-BUILDER_CACHE = {}
+from sqlalchemy_recipe.expression.transformer import TransformToSQLAlchemyExpression
+from sqlalchemy_recipe.expression.validator import SQLALchemyValidator
 
 
 @dataclass
 class BuilderResponse:
     datatype: DataType
     expression: ClauseElement
+    is_aggr: bool
 
 
 class SQLAlchemyBuilder:
@@ -45,9 +45,10 @@ class SQLAlchemyBuilder:
         text: str,
         forbid_aggregation: bool = False,
         enforce_aggregation: bool = False,
+        convert_dates_with: str = None,
+        convert_datetimes_with: str = None,
+        default_aggregation=func.sum,
         debug: bool = False,
-        convert_dates_with=None,
-        convert_datetimes_with=None,
     ) -> BuilderResponse:
         """Return a parse tree for text
 
@@ -65,9 +66,7 @@ class SQLAlchemyBuilder:
             GrammarError: A description of any errors and where they occur
 
         Returns:
-            A tuple of
-                ColumnElement: A SQLALchemy expression
-                DataType: The datatype of the expression (bool, date, datetime, num, str)
+            BuilderResponse
         """
         tree = self.reflected_table.parser.parse(text, start="col")
         validator = SQLALchemyValidator(
@@ -81,7 +80,10 @@ class SQLAlchemyBuilder:
             if debug:
                 print("".join(map(str, validator.errors)))
                 print("Tree:\n" + tree.pretty())
-            raise GrammarError("".join(map(str, validator.errors)))
+            # Validator.errors is a list of VisitError
+            ge = GrammarError("".join(map(str, validator.errors)))
+            ge.validator_errors = validator.errors
+            raise ge
 
         if debug:
             print("Tree:\n" + tree.pretty())
@@ -104,6 +106,12 @@ class SQLAlchemyBuilder:
             and not validator.found_aggregation
             and datatype == "num"
         ):
-            return BuilderResponse(expression=func.sum(expr), datatype=datatype)
+            return BuilderResponse(
+                expression=default_aggregation(expr),
+                datatype=datatype,
+                is_aggr=validator.found_aggregation,
+            )
         else:
-            return BuilderResponse(expression=expr, datatype=datatype)
+            return BuilderResponse(
+                expression=expr, datatype=datatype, is_aggr=validator.found_aggregation
+            )
